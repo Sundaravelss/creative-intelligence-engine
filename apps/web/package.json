@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@cie/canvas-nodes": "workspace:*",
+    "@cie/model-registry": "workspace:*",
     "@cie/shared-types": "workspace:*",
     "@cie/ui-artifacts": "workspace:*",
     "@radix-ui/react-avatar": "^1.1.11",

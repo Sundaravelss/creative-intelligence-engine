@@ -72,6 +72,7 @@ _ROUTER_MODULES = [
     "connectors",
     "brand",
     "onboarding",
+    "canvas",
 ]
 
 for _name in _ROUTER_MODULES:

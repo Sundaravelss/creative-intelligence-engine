@@ -35,6 +35,7 @@ from .nodes import (
     art_director,
     copywriter,
     creative_director,
+    marketing_director,
     publisher,
     strategist,
 )
@@ -135,6 +136,11 @@ class CampaignGraph:
         }
         # v3 W0: ✻ ShopOS started pill in the chat thread.
         yield {"type": "started"}
+
+        # Marketing-studio one-link mode: pre-seed hooks + format mix so the
+        # downstream graph produces a balanced ad spread without prompting.
+        if self._brief.get("mode") == "marketing":
+            state = await marketing_director.forward(state, self._runtime)
 
         # 1. Strategist (reasoning → emits `thought`)
         node_started = time.monotonic()
@@ -263,6 +269,7 @@ class CampaignGraph:
                     "name": f"{variant['variant_label'].title()} — {variant['shot_id']}",
                     "url": "",  # generation adapter populates this in real runs
                     "shotId": variant["shot_id"],
+                    "shotKind": variant.get("shot_kind"),
                     "variantId": variant["variant_id"],
                     "variantLabel": variant["variant_label"],
                     "format": primary_format,
@@ -273,6 +280,7 @@ class CampaignGraph:
                     "meta": {
                         "variantOf": variant["shot_id"],
                         "variantLabel": variant["variant_label"],
+                        "shotKind": variant.get("shot_kind"),
                         "prompt": variant["prompt"],
                     },
                 },

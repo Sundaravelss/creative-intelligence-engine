@@ -5,7 +5,7 @@
 // one is visible we wait an additional ~500ms then call onAdvance() so the
 // reveal feels finished before phase 2 takes over.
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 
 interface AgentsAssemblyProps {
@@ -21,11 +21,21 @@ const AGENTS: { src: string; label: string }[] = [
 ];
 
 export function AgentsAssembly({ onAdvance }: AgentsAssemblyProps) {
+  // Fire onAdvance EXACTLY ONCE on mount. The component stays in the DOM
+  // throughout onboarding (scrollable-feed pattern) — without this guard the
+  // effect re-runs whenever the parent re-renders with a new onAdvance arrow,
+  // which would reset later phases back to "intake" mid-flow.
+  const fired = useRef(false);
+  const onAdvanceRef = useRef(onAdvance);
+  onAdvanceRef.current = onAdvance;
   useEffect(() => {
-    // 5 avatars × 200ms = 1000ms reveal + 500ms grace = 1500ms total
-    const t = setTimeout(onAdvance, 1500);
+    if (fired.current) return;
+    const t = setTimeout(() => {
+      fired.current = true;
+      onAdvanceRef.current();
+    }, 1500);
     return () => clearTimeout(t);
-  }, [onAdvance]);
+  }, []);
 
   return (
     <motion.div

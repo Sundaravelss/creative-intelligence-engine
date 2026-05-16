@@ -12,6 +12,48 @@ into a single liquid-glass UI where multi-agent campaigns turn a brand brief int
 
 The `Studio` page is the default landing surface: a **two-pane chat (left) + liquid-glass canvas (right)** layout. The chat thread streams reasoning and inline generation chips; the canvas shows artifact variants in carousel / grid / stack view modes with virality scores per variant.
 
+## v3 surfaces (current)
+
+- **`/splash`** — boot screen with serif "Sage" wordmark over the blurred Tavily landscape (`apps/web/public/splash/landscape-bg.webp`). Auto-redirects to `/onboarding` if `getOnboardingState().complete === false`, else to `/studio`. Uses CSS-only fallback (no MP4 was available).
+- **`/onboarding`** — vertical-feed state machine over 5 phases that **append** as the user advances (NOT swap-on-advance):
+  1. `agents` — "Assembling your agents" with 5 stylized portraits, 200ms stagger reveal. **Fires `onAdvance` exactly once via a ref guard** — see "Conventions / Common pitfalls" below.
+  2. `intake` — "Hi, I'm Sage…" bot bubble + sticky `<StoreLinkBar>` with purple→peach halo and Skip / Scan buttons.
+  3. `scanning` — `ScanProgress` consumes SSE from `POST /api/brand/scan` (Tavily-backed, 4 phases: fetching → parsing → extracting → complete; 30s timeout falls through to reward).
+  4. `reward` — "You've got 250 credits on us!" card. **Auto-advances to `confirm` after 1800ms.**
+  5. `confirm` — `BrandConfirmCard` with Brand.md / Logos / Colours / Font / Reference Images + Retry / Proceed. Proceed PUTs onboarding state and pushes to `/studio`.
+- **Studio empty-state** (`<EmptyStateHello>`) — replaces v2 hero with serif "Hello {brand.name}" + "What are we going to sell today?" + textarea + 4 quick-action chips (Create image / Make video / Create slides / Make a store-muted) + `<ConnectorDropdown>` + bottom-right `<SpacesHintCard>`. Empty-state textarea submits on **Cmd/Ctrl+Enter**; running-state composer footer submits on plain Enter.
+- **Studio chat** — new message kinds: `started` (✻ Sage started pill), `thought` (✻ Sage thought for Ns ▾, click expands full reasoning), `agent_step` (avatar + label + N of M done ▾, expands to substep list with status icons), plus `LiveStreamProse` shimmer tail. SSE handler in `apps/web/app/(app)/studio/page.tsx` dispatches new events ABOVE legacy `node_start` for back-compat.
+- **`/agents`** — 6 active agent cards using stylized PNG portraits via `avatarFor(agent.id)` from `apps/web/lib/agentAvatars.ts` + 2 coming-soon tiles (Comptable, Recruiter) faded out.
+
+## Brand persona
+
+The user-facing assistant is named **Sage** (friendly, conversational). The product / repo is "Creative Intelligence Engine" — Sage is the bot persona. Avoid robotic copy like "I'm now going to build your brand's AI agent". Prefer warm, present-tense voice ("Hi, I'm Sage. I'll be helping you set up your brand today…"). Status pills read `Sage started`, `Sage thought for Ns`, never `CIE` / `ShopOS` / `the AI`.
+
+## Conventions / Common pitfalls
+
+- **Long-lived components must not call parent setters from a `useEffect` keyed on the setter.** Anti-pattern: `useEffect(() => setTimeout(onAdvance, 1500), [onAdvance])` in a component that stays mounted across phase changes — the parent re-renders pass a fresh arrow function, the effect re-runs, the timer restarts, and 1500ms later the parent state gets overwritten. Fix: ref-guard the call so it fires **exactly once** on mount. Implementation pattern in `apps/web/components/onboarding/AgentsAssembly.tsx`:
+  ```ts
+  const fired = useRef(false);
+  const cbRef = useRef(onAdvance);
+  cbRef.current = onAdvance;
+  useEffect(() => {
+    if (fired.current) return;
+    const t = setTimeout(() => { fired.current = true; cbRef.current(); }, 1500);
+    return () => clearTimeout(t);
+  }, []);
+  ```
+  This was the exact bug behind "Skip path on /onboarding silently bounces back to intake" reported on 2026-05-16.
+
+## Dev / debugging tips
+
+- **Reset onboarding for repeated demo runs:**
+  ```bash
+  echo '{"complete": false}' > fixtures/onboarding.json
+  ```
+  Or `curl -X PUT http://localhost:8100/api/onboarding/state -H 'content-type: application/json' -d '{"complete": false, "brandUrl": null, "completedAt": null}'`.
+- **Skip path bypasses the Tavily scan**, so `BrandConfirmCard` renders fallback voice + palette. The "Brand Memory" page can be revisited later to scan a real URL.
+- Diagnostic Playwright test for onboarding flows lives at `apps/web/tests/onboarding-skip.spec.ts`. Each step logs DOM state to console — useful for tracing phase transitions.
+
 ## Repo layout
 
 ```

@@ -71,6 +71,9 @@ class BrandProfile(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+CanvasMode = Literal["storyboard", "marketing", "advanced"]
+
+
 class Brief(BaseModel):
     url: str | None = None
     keyword: str | None = None
@@ -78,6 +81,30 @@ class Brief(BaseModel):
     competitors: list[str] | None = None
     positioning: str | None = None
     hooks: list[str] = Field(default_factory=list)
+    # Higgsfield-style canvas extensions. Optional + nullable so existing
+    # callers (legacy /studio chat, fixtures) keep working unchanged.
+    mode: CanvasMode | None = None
+    character_id: str | None = Field(None, alias="characterId")
+    moodboard_pins: list[str] = Field(default_factory=list, alias="moodboardPins")
+    preset_ids: list[str] = Field(default_factory=list, alias="presetIds")
+
+    model_config = {"populate_by_name": True}
+
+
+class CanvasPin(BaseModel):
+    id: str
+    url: str
+    label: str | None = None
+    source: str | None = None
+
+
+class CanvasCharacter(BaseModel):
+    id: str
+    name: str
+    persona: str
+    reference_urls: list[str] = Field(default_factory=list, alias="referenceUrls")
+
+    model_config = {"populate_by_name": True}
 
 
 class ScoreBreakdown(BaseModel):

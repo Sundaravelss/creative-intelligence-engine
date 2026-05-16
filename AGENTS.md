@@ -131,7 +131,16 @@ cd services/agents && uv run pytest
 3. **Never substitute fixture data for live API responses.** `research/shopos/brand_capture.json` is a *seed*, not a *substitute*.
 4. **Don't introduce LangGraph or CrewAI** — the orchestrator is plain async Python deliberately.
 5. **Don't break the Paperclip-style adapter contract.** Every backend is `async execute(ctx) -> Result`.
-6. **Don't break the Studio default route.** `/` always 307s to `/studio`.
+6. **Don't break the Studio default route.** `/` always 307s to `/studio` once onboarding is complete; otherwise `/splash`.
+7. **The user-facing bot is named Sage**, not CIE / ShopOS / "the AI". Friendly, conversational copy only.
+8. **Long-lived onboarding components must ref-guard `onAdvance` callbacks** — see CLAUDE.md "Conventions / Common pitfalls". Effect with `[onAdvance]` deps in a component that stays mounted = repeated phase resets.
+
+## v3 surface map
+
+- `/` → `/splash` → `/onboarding` (5-phase append-feed) → `/studio`
+- `/onboarding` phases: `agents` → `intake` → `scanning` → `reward` → `confirm` (Skip jumps `intake` → `reward` directly, bypassing `scanning`)
+- Studio empty state: `EmptyStateHello` (Cmd+Enter to submit) | running state: chat rail + liquid canvas with `started`/`thought`/`agent_step` SSE message kinds
+- All agent avatars: `apps/web/public/agents/*.png` via `avatarFor(id)` from `apps/web/lib/agentAvatars.ts`
 
 ## Quick links
 

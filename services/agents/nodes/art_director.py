@@ -49,6 +49,28 @@ def _parse(text: str) -> dict[str, Any]:
 # side-by-side stack scored by Performance Analyst.
 STYLE_VARIANTS: tuple[str, ...] = ("editorial", "golden-hour", "overcast")
 
+# Camera-angle slots used when ``brief.mode == "storyboard"``. Mirrors the
+# six slots rendered by `apps/web/components/canvas/storyboard/StoryboardGrid`.
+STORYBOARD_SHOT_KINDS: tuple[str, ...] = (
+    "wide",
+    "close",
+    "side",
+    "overhead",
+    "tracking",
+    "static",
+)
+
+# Prompt modifiers per camera angle. These are appended to the base
+# reference so the underlying image model produces the right framing.
+_SHOT_KIND_PROMPTS: dict[str, str] = {
+    "wide": "wide establishing shot, full body in frame, environmental context",
+    "close": "tight close-up, shallow depth of field, expressive detail",
+    "side": "side profile angle, parallel-to-subject framing",
+    "overhead": "overhead bird's-eye view, top-down composition",
+    "tracking": "low-angle tracking shot, subject in motion, kinetic blur",
+    "static": "static locked-off frame, symmetrical composition",
+}
+
 
 def _variant_count() -> int:
     raw = os.environ.get("VARIANTS_PER_SHOT", "3")
@@ -67,7 +89,7 @@ def _expand_variants(
     """Expand each reference into ``variant_count`` style variants.
 
     Returns a flat list of dicts shaped:
-      {shot_id, variant_id, variant_label, prompt}
+      {shot_id, shot_kind, variant_id, variant_label, prompt}
     """
 
     expanded: list[dict[str, Any]] = []
@@ -78,9 +100,36 @@ def _expand_variants(
             expanded.append(
                 {
                     "shot_id": shot_id,
+                    "shot_kind": "wide",
                     "variant_id": f"{shot_id}-v{variant_idx}",
                     "variant_label": style,
                     "prompt": f"{ref} of {keyword}, {style} style",
+                }
+            )
+    return expanded
+
+
+def _expand_storyboard(keyword: str, variant_count: int) -> list[dict[str, Any]]:
+    """Fan a single brief into 6 camera-angle shots × N style variants.
+
+    Used when the brief carries ``mode == "storyboard"``. The resulting
+    list keeps the same shape as ``_expand_variants`` so downstream code
+    (orchestrator, generation adapters) needs no special-case branch.
+    """
+
+    expanded: list[dict[str, Any]] = []
+    for shot_kind in STORYBOARD_SHOT_KINDS:
+        shot_id = f"shot_{shot_kind}"
+        framing = _SHOT_KIND_PROMPTS[shot_kind]
+        for variant_idx in range(variant_count):
+            style = STYLE_VARIANTS[variant_idx % len(STYLE_VARIANTS)]
+            expanded.append(
+                {
+                    "shot_id": shot_id,
+                    "shot_kind": shot_kind,
+                    "variant_id": f"{shot_id}-v{variant_idx}",
+                    "variant_label": style,
+                    "prompt": f"{keyword}, {framing}, {style} style",
                 }
             )
     return expanded
@@ -105,9 +154,14 @@ async def forward(state: dict[str, Any], runtime: Any) -> dict[str, Any]:
     references = parsed.get("references") or [
         f"hero shot of {state.get('brief', {}).get('keyword', 'product')}"
     ]
-    keyword = state.get("brief", {}).get("keyword", "product")
+    brief = state.get("brief", {}) or {}
+    keyword = brief.get("keyword", "product")
+    mode = brief.get("mode")
     variant_count = _variant_count()
-    variants = _expand_variants(references, keyword, variant_count)
+    if mode == "storyboard":
+        variants = _expand_storyboard(keyword, variant_count)
+    else:
+        variants = _expand_variants(references, keyword, variant_count)
     return {
         **state,
         "references": references,
@@ -120,4 +174,9 @@ async def forward(state: dict[str, Any], runtime: Any) -> dict[str, Any]:
     }
 
 
-__all__ = ["INSTRUCTIONS", "STYLE_VARIANTS", "forward"]
+__all__ = [
+    "INSTRUCTIONS",
+    "STYLE_VARIANTS",
+    "STORYBOARD_SHOT_KINDS",
+    "forward",
+]
