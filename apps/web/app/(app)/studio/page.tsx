@@ -14,13 +14,17 @@ import type {
 } from "@/components/studio/chat/types";
 import { LiquidCanvas } from "@/components/studio/canvas/LiquidCanvas";
 import type { CanvasViewMode } from "@/components/studio/canvas/ViewModeToggle";
-import { EmptyStateHero } from "@/components/studio/EmptyStateHero";
+import {
+  EmptyStateHello,
+  type BrandProfile,
+} from "@/components/studio/EmptyStateHello";
+import { SpacesHintCard } from "@/components/studio/SpacesHintCard";
 import type { StudioFormat } from "@/components/studio/FormatPicker";
+import { api } from "@/lib/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
 const PROJECT_NAME = "Marketing Image Generation for Bags";
-const DEFAULT_BRAND = "Allbirds";
 
 const DEFAULT_FOLLOWUPS: SuggestedFollowupItem[] = [
   {
@@ -75,6 +79,15 @@ interface SsePayload {
     artifactId: string;
     viralScore: number;
   }>;
+  // v3 additive event payloads (started / thought / agent_step_start / agent_step_complete).
+  agentId?: string;
+  summary?: string;
+  fullText?: string;
+  elapsedSec?: number;
+  label?: string;
+  totalSubsteps?: number;
+  completedSubsteps?: number;
+  substeps?: Array<{ label: string; status: "joined" | "done" | "failed" }>;
 }
 
 function uid(prefix: string): string {
@@ -118,9 +131,31 @@ function StudioPageInner() {
   >({});
   const [focusId, setFocusId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const [format, setFormat] = useState<StudioFormat>("reel");
+  const [format, _setFormat] = useState<StudioFormat>("reel");
+  const [brand, setBrand] = useState<BrandProfile | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const chipTimers = useRef<Map<string, number>>(new Map());
+
+  // Suppress "unused setter" lint — format may be set by future composer affordances.
+  void _setFormat;
+
+  // Load brand profile once for the Hello hero.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get<BrandProfile>("/api/brand")
+      .then((b) => {
+        if (cancelled) return;
+        setBrand(b ?? null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setBrand(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Tick generation chips so the elapsed counter advances visibly.
   useEffect(() => {
@@ -266,7 +301,70 @@ function StudioPageInner() {
             }
             const { event, data } = parsed;
 
-            if (event === "node_start" && data.nodeId) {
+            if (event === "started") {
+              setThread((curr) => [
+                ...curr,
+                { kind: "started", id: uid("st"), ts: new Date().toISOString() },
+              ]);
+            } else if (event === "thought") {
+              setThread((curr) => [
+                ...curr,
+                {
+                  kind: "thought",
+                  id: uid("th"),
+                  agentId: data.agentId ?? "strategist",
+                  summary: data.summary ?? "",
+                  fullText: data.fullText ?? "",
+                  elapsedSec: Number(data.elapsedSec) || 0,
+                  collapsed: true,
+                },
+              ]);
+            } else if (event === "agent_step_start") {
+              setThread((curr) => [
+                ...curr,
+                {
+                  kind: "agent_step",
+                  id: uid("step"),
+                  agentId: data.agentId ?? "strategist",
+                  label: data.label ?? "Working",
+                  completed: 0,
+                  total: Number(data.totalSubsteps) || 1,
+                  substeps: [],
+                  collapsed: true,
+                },
+              ]);
+            } else if (event === "agent_step_complete") {
+              const targetAgentId = data.agentId;
+              const completedCount = Number(data.completedSubsteps);
+              const nextSubsteps = data.substeps ?? [];
+              setThread((curr) => {
+                // Match the LAST agent_step block for this agentId that hasn't
+                // been completed yet. Walking back-to-front avoids racing past
+                // earlier blocks if the same agent runs twice in one campaign.
+                let patched = false;
+                const next = [...curr];
+                for (let i = next.length - 1; i >= 0; i--) {
+                  const m = next[i];
+                  if (
+                    m.kind === "agent_step" &&
+                    m.agentId === targetAgentId &&
+                    m.completed < m.total
+                  ) {
+                    next[i] = {
+                      ...m,
+                      completed:
+                        Number.isFinite(completedCount) && completedCount > 0
+                          ? completedCount
+                          : m.total,
+                      substeps: nextSubsteps,
+                    };
+                    patched = true;
+                    break;
+                  }
+                }
+                return patched ? next : curr;
+              });
+            } else if (event === "node_start" && data.nodeId) {
               const nodeId = data.nodeId;
               const reasoning = REASONING_BY_NODE[nodeId];
               if (reasoning) {
@@ -444,13 +542,14 @@ function StudioPageInner() {
         disabled={running}
       />
       {isEmpty ? (
-        <EmptyStateHero
-          brandName={DEFAULT_BRAND}
-          format={format}
-          setFormat={setFormat}
-          onSubmit={handleSubmit}
-          disabled={running}
-        />
+        <div className="relative h-full">
+          <EmptyStateHello
+            brand={brand}
+            onSubmit={handleSubmit}
+            disabled={running}
+          />
+          <SpacesHintCard />
+        </div>
       ) : (
         <LiquidCanvas
           artifacts={artifacts}

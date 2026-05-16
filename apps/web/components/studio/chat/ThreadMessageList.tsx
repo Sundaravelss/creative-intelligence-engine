@@ -8,6 +8,9 @@ import { GenerationChip } from "./GenerationChip";
 import { AssistantProse } from "./AssistantProse";
 import { FeedbackRow } from "./FeedbackRow";
 import { SuggestedFollowups } from "./SuggestedFollowups";
+import { StartedPill } from "./StartedPill";
+import { ThoughtPill } from "./ThoughtPill";
+import { AgentStepBlock } from "./AgentStepBlock";
 
 interface ThreadMessageListProps {
   thread: ChatMessage[];
@@ -37,6 +40,30 @@ export function ThreadMessageList({
                   key={msg.id}
                   text={msg.text}
                   timestamp={msg.timestamp}
+                />
+              );
+            case "started":
+              return <StartedPill key={msg.id} ts={msg.ts} />;
+            case "thought":
+              return (
+                <ThoughtPill
+                  key={msg.id}
+                  summary={msg.summary}
+                  fullText={msg.fullText}
+                  elapsedSec={msg.elapsedSec}
+                  defaultExpanded={msg.collapsed === false}
+                />
+              );
+            case "agent_step":
+              return (
+                <AgentStepBlock
+                  key={msg.id}
+                  agentId={msg.agentId}
+                  label={msg.label}
+                  completed={msg.completed}
+                  total={msg.total}
+                  substeps={msg.substeps}
+                  defaultExpanded={msg.collapsed === false}
                 />
               );
             case "reasoning":

@@ -20,15 +20,22 @@ test.describe("Studio surface (WS-V1 chat + canvas)", () => {
       page.getByRole("button", { name: /Marketing Image Generation for Bags/i }),
     ).toBeVisible();
 
-    // Empty-state textarea (PromptInput)
-    const prompt = page.getByTestId("cie-prompt-input");
-    await expect(prompt).toBeVisible();
-    await expect(prompt.locator("textarea")).toBeVisible();
+    // New Hello-name hero copy (W2)
+    await expect(
+      page.getByText(/What are we going to sell today\?/i),
+    ).toBeVisible();
 
-    // Format pills in empty-state
-    const picker = page.getByTestId("cie-format-picker");
-    await expect(picker).toBeVisible();
-    await expect(picker.getByRole("radio")).toHaveCount(5);
+    // New Hello composer
+    const composer = page.getByTestId("cie-hello-composer");
+    await expect(composer).toBeVisible();
+    await expect(composer.locator("textarea")).toBeVisible();
+
+    // 4 quick-action chips
+    const chips = page.getByTestId("cie-quick-actions").getByRole("button");
+    await expect(chips).toHaveCount(4);
+
+    // Spaces hint card
+    await expect(page.getByTestId("cie-spaces-hint")).toBeVisible();
 
     // Bottom composer "Add a follow-up…" textarea (always present)
     await expect(

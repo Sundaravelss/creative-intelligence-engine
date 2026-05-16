@@ -38,6 +38,9 @@ coverage/
 research/
 browser-harness/
 
+# Raw research screenshots (account-bound assets; only commit annotated UX notes)
+docs/research/**/screenshots/
+
 # Playwright
 test-results/
 playwright-report/

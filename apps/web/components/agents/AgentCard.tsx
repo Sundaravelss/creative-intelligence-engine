@@ -2,6 +2,8 @@
 
 import type { LucideIcon } from "lucide-react";
 
+import { avatarFor } from "@/lib/agentAvatars";
+
 export interface AgentDescriptor {
   id: string;
   name: string;
@@ -25,7 +27,7 @@ const ADAPTER_LABEL: Record<AgentDescriptor["adapter"], string> = {
 };
 
 export function AgentCard({ agent }: AgentCardProps) {
-  const Icon = agent.icon;
+  const portrait = avatarFor(agent.id);
   return (
     <article
       className="hc-glass hc-card group relative flex flex-col gap-3 overflow-hidden border border-[color:var(--color-border)] p-5"
@@ -41,15 +43,13 @@ export function AgentCard({ agent }: AgentCardProps) {
         }}
       />
       <div className="flex items-start justify-between gap-3">
-        <div
-          className={[
-            "hc-pill inline-flex h-12 w-12 items-center justify-center border border-[color:var(--color-border)] bg-[color:var(--hc-surface-elevated)] transition-transform group-hover:scale-105",
-            agent.accent,
-          ].join(" ")}
-          aria-hidden
-        >
-          <Icon size={20} />
-        </div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={portrait.src}
+          alt={`${agent.name} portrait`}
+          className="size-16 shrink-0 rounded-full object-cover ring-2 ring-[color:var(--color-border)] transition-transform group-hover:scale-105 group-hover:ring-[color:var(--hc-accent-coral)]"
+          loading="lazy"
+        />
         <span
           className="hc-pill border border-[color:var(--color-border)] bg-[color:var(--hc-surface-recessed)] px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
           title={`Adapter backend: ${ADAPTER_LABEL[agent.adapter]}`}
