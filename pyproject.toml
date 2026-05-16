@@ -1,0 +1,15 @@
+[project]
+name = "creative-intelligence-engine"
+version = "0.1.0"
+description = "Agentic Marketing OS — Python services workspace"
+requires-python = ">=3.11"
+
+[tool.uv.workspace]
+members = [
+    "services/api",
+    "services/agents",
+    "services/scheduler",
+]
+
+[tool.uv]
+package = false

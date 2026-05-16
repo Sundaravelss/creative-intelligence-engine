@@ -1,0 +1,291 @@
+@import "tailwindcss";
+
+/*
+ * Apple HIG-inspired glass tokens.
+ * Lifted from my_paperclip/apps/hyperclip-ui/src/styles/globals.css
+ * + my_paperclip/packages/ui-features/src/artifacts/styles/glass.css.
+ * Pure CSS variables; no library deps.
+ */
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  --color-background: oklch(1 0 0);
+  --color-foreground: oklch(0.14 0 0);
+  --color-muted: oklch(0.96 0 0);
+  --color-muted-foreground: oklch(0.45 0 0);
+  --color-border: oklch(0.92 0 0);
+  --color-accent: oklch(0.50 0.15 255);
+  --color-accent-foreground: oklch(0.99 0 0);
+  --color-destructive: oklch(0.55 0.22 25);
+  --color-destructive-foreground: oklch(0.99 0 0);
+  --color-ring: oklch(0.50 0.15 255);
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.14 0 0);
+  --color-popover: oklch(1 0 0);
+  --color-popover-foreground: oklch(0.14 0 0);
+  --color-input: oklch(0.92 0 0);
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+}
+
+:root {
+  --hc-surface-glass: oklch(1 0 0 / 0.72);
+  --hc-surface-glass-strong: oklch(1 0 0 / 0.86);
+  --hc-surface-elevated: oklch(0.985 0 0);
+  --hc-surface-recessed: oklch(0.97 0 0);
+
+  --hc-shadow-card:
+    0 1px 2px oklch(0.14 0 0 / 0.04),
+    0 8px 24px oklch(0.14 0 0 / 0.08),
+    0 24px 48px oklch(0.14 0 0 / 0.06);
+  --hc-shadow-card-hover:
+    0 2px 4px oklch(0.14 0 0 / 0.06),
+    0 16px 32px oklch(0.14 0 0 / 0.10),
+    0 32px 64px oklch(0.14 0 0 / 0.08);
+
+  --hc-radius-card: 18px;
+  --hc-radius-tab: 12px;
+  --hc-radius-pill: 999px;
+
+  --hc-accent-coral: oklch(0.62 0.21 27);
+  --hc-accent-coral-soft: oklch(0.62 0.21 27 / 0.12);
+
+  --hc-font-display:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+    "Inter", system-ui, sans-serif;
+  --hc-font-serif:
+    "New York", "Iowan Old Style", "Apple Garamond", Georgia, serif;
+
+  --hc-ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --hc-ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --hc-duration-fast: 160ms;
+  --hc-duration-normal: 280ms;
+  --hc-duration-slow: 480ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hc-surface-glass: oklch(0.18 0 0 / 0.72);
+    --hc-surface-glass-strong: oklch(0.18 0 0 / 0.88);
+    --hc-surface-elevated: oklch(0.22 0 0);
+    --hc-surface-recessed: oklch(0.16 0 0);
+    --hc-shadow-card:
+      0 1px 2px oklch(0 0 0 / 0.32),
+      0 8px 24px oklch(0 0 0 / 0.40),
+      0 24px 48px oklch(0 0 0 / 0.32);
+  }
+}
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+  body {
+    background: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+  }
+  * {
+    border-color: var(--color-border);
+  }
+}
+
+.hc-glass {
+  background: var(--hc-surface-glass);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+}
+
+.hc-glass-strong {
+  background: var(--hc-surface-glass-strong);
+  backdrop-filter: blur(32px) saturate(200%);
+  -webkit-backdrop-filter: blur(32px) saturate(200%);
+}
+
+.hc-card {
+  background: var(--hc-surface-elevated);
+  border-radius: var(--hc-radius-card);
+  box-shadow: var(--hc-shadow-card);
+  transition: box-shadow var(--hc-duration-normal) var(--hc-ease-spring),
+              transform var(--hc-duration-normal) var(--hc-ease-spring);
+}
+
+.hc-card:hover {
+  box-shadow: var(--hc-shadow-card-hover);
+}
+
+.hc-pill {
+  border-radius: var(--hc-radius-pill);
+}
+
+.hc-display {
+  font-family: var(--hc-font-display);
+  font-feature-settings: "ss01", "cv11";
+  letter-spacing: -0.011em;
+}
+
+.hc-serif-headline {
+  font-family: var(--hc-font-serif);
+  letter-spacing: -0.02em;
+}
+
+.hc-accent-coral {
+  color: var(--hc-accent-coral);
+}
+
+.hc-snap-x {
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+
+.hc-snap-center {
+  scroll-snap-align: center;
+}
+
+.hc-scrollbar-none {
+  scrollbar-width: none;
+}
+.hc-scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+.hc-fade-in {
+  animation: hc-fade-in var(--hc-duration-normal) var(--hc-ease-spring) both;
+}
+
+.hc-slide-in-right {
+  animation: hc-slide-in-right var(--hc-duration-normal) var(--hc-ease-spring) both;
+}
+
+@keyframes hc-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes hc-slide-in-right {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hc-card,
+  .hc-fade-in,
+  .hc-slide-in-right {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ============================================================
+ * WS-H polish pass (appended; do not remove or reorder above).
+ * ------------------------------------------------------------
+ * Adds: gradient backdrops on glass cards, hover lift,
+ * `hc-edge-pulse` animation hook for active edges (WS-B coord),
+ * and a subtle grain layer for depth.
+ * ============================================================ */
+
+:root {
+  --hc-grain-opacity: 0.025;
+  --hc-lift-shadow:
+    0 4px 8px oklch(0.14 0 0 / 0.08),
+    0 24px 48px oklch(0.14 0 0 / 0.14),
+    0 48px 96px oklch(0.14 0 0 / 0.10);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hc-grain-opacity: 0.04;
+    --hc-lift-shadow:
+      0 4px 12px oklch(0 0 0 / 0.40),
+      0 24px 48px oklch(0 0 0 / 0.50),
+      0 48px 96px oklch(0 0 0 / 0.40);
+  }
+}
+
+/* Refined glass card surface — adds a faint vertical gradient so the
+ * card reads as a translucent slab rather than a flat fill. */
+.hc-card {
+  background:
+    linear-gradient(
+      180deg,
+      oklch(1 0 0 / 0.04) 0%,
+      transparent 40%
+    ),
+    var(--hc-surface-elevated);
+  border-radius: var(--hc-radius-card);
+  box-shadow: var(--hc-shadow-card);
+  transition:
+    box-shadow var(--hc-duration-normal) var(--hc-ease-spring),
+    transform var(--hc-duration-normal) var(--hc-ease-spring);
+}
+
+.hc-card:hover {
+  box-shadow: var(--hc-lift-shadow);
+  transform: translateY(-2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hc-card:hover {
+    transform: none;
+  }
+}
+
+/* Active-edge pulse — coordinated class name with WS-B's CustomEdge.
+ * Apply via `<path className="hc-edge-pulse" />` or attach via data-attr. */
+.hc-edge-pulse {
+  stroke: var(--hc-accent-coral);
+  stroke-width: 2;
+  stroke-dasharray: 6 6;
+  animation: hc-edge-pulse-flow 1.2s linear infinite;
+}
+
+@keyframes hc-edge-pulse-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+@keyframes hc-pulse-soft {
+  0%, 100% {
+    box-shadow: 0 0 0 0 var(--hc-accent-coral-soft);
+  }
+  50% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+.hc-pulse-soft {
+  animation: hc-pulse-soft 2s var(--hc-ease-smooth) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hc-edge-pulse,
+  .hc-pulse-soft {
+    animation: none !important;
+  }
+}
+
+/* Optional grain layer for depth on top of large glass surfaces.
+ * Apply by adding `.hc-grain` to a positioned ancestor. */
+.hc-grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(
+      circle at 1px 1px,
+      currentColor 1px,
+      transparent 1px
+    );
+  background-size: 3px 3px;
+  opacity: var(--hc-grain-opacity);
+  mix-blend-mode: overlay;
+}

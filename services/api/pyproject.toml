@@ -1,0 +1,34 @@
+[project]
+name = "cie-api"
+version = "0.1.0"
+description = "Creative Intelligence Engine — FastAPI gateway"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "pydantic>=2.8",
+    "python-dotenv>=1.0",
+    "sse-starlette>=2.1",
+    "tavily-python>=0.5",
+    "openai>=1.50",
+    "apscheduler>=3.10",
+    "python-multipart>=0.0.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

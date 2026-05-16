@@ -1,0 +1,24 @@
+{
+  "id": "acme-sneakers",
+  "name": "Acme Sneakers",
+  "logoUrl": "/fixtures/assets/brand-logo.png",
+  "palette": [
+    "#0F172A",
+    "#F97316",
+    "#FBBF24",
+    "#FFFFFF"
+  ],
+  "voice": "Bold, irreverent, Gen-Z. Short sentences. Lots of attitude.",
+  "products": [
+    {
+      "id": "p-001",
+      "name": "Storm Runner",
+      "sku": "SR-2026"
+    },
+    {
+      "id": "p-002",
+      "name": "Cloud Walker",
+      "sku": "CW-2026"
+    }
+  ]
+}

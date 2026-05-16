@@ -1,0 +1,12 @@
+{
+  "meta-ads": {"impressions": 12450, "clicks": 320, "ctr": 0.0257, "cpm": 8.4, "spend": 104.58, "currency": "EUR"},
+  "tiktok-ads": {"impressions": 28400, "clicks": 612, "ctr": 0.0215, "cpm": 5.2, "spend": 147.68, "currency": "EUR"},
+  "google-ads": {"impressions": 9870, "clicks": 412, "ctr": 0.0418, "cpm": 12.1, "spend": 119.42, "currency": "EUR"},
+  "linkedin-ads": {"impressions": 4220, "clicks": 88, "ctr": 0.0208, "cpm": 22.0, "spend": 92.84, "currency": "EUR"},
+  "instagram": {"reach": 5400, "engagement": 412, "saves": 38, "shares": 15},
+  "tiktok": {"views": 14800, "likes": 822, "comments": 41, "shares": 67},
+  "linkedin": {"impressions": 1840, "engagement": 124, "ctr": 0.067},
+  "x": {"impressions": 3210, "engagement": 96, "reposts": 14, "likes": 71},
+  "facebook": {"reach": 2900, "engagement": 184, "shares": 22},
+  "youtube": {"views": 8420, "watchTime": 18420, "likes": 312, "subscribers": 41}
+}

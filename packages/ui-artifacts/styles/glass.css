@@ -1,0 +1,57 @@
+/*
+ * Apple HIG-inspired glass tokens. Pure CSS variables; no library deps.
+ * Same content as apps/web/app/globals.css glass block.
+ * Kept here so the package can be consumed standalone (e.g. Storybook,
+ * a future second app) without depending on the web app's globals.
+ */
+
+:root {
+  --hc-surface-glass: oklch(1 0 0 / 0.72);
+  --hc-surface-glass-strong: oklch(1 0 0 / 0.86);
+  --hc-surface-elevated: oklch(0.985 0 0);
+  --hc-surface-recessed: oklch(0.97 0 0);
+
+  --hc-shadow-card:
+    0 1px 2px oklch(0.14 0 0 / 0.04),
+    0 8px 24px oklch(0.14 0 0 / 0.08),
+    0 24px 48px oklch(0.14 0 0 / 0.06);
+  --hc-shadow-card-hover:
+    0 2px 4px oklch(0.14 0 0 / 0.06),
+    0 16px 32px oklch(0.14 0 0 / 0.10),
+    0 32px 64px oklch(0.14 0 0 / 0.08);
+
+  --hc-radius-card: 18px;
+  --hc-radius-tab: 12px;
+  --hc-radius-pill: 999px;
+
+  --hc-accent-coral: oklch(0.62 0.21 27);
+  --hc-accent-coral-soft: oklch(0.62 0.21 27 / 0.12);
+
+  --hc-ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --hc-ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --hc-duration-fast: 160ms;
+  --hc-duration-normal: 280ms;
+  --hc-duration-slow: 480ms;
+}
+
+.hc-glass {
+  background: var(--hc-surface-glass);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+}
+
+.hc-glass-strong {
+  background: var(--hc-surface-glass-strong);
+  backdrop-filter: blur(32px) saturate(200%);
+  -webkit-backdrop-filter: blur(32px) saturate(200%);
+}
+
+.hc-card {
+  background: var(--hc-surface-elevated);
+  border-radius: var(--hc-radius-card);
+  box-shadow: var(--hc-shadow-card);
+}
+
+.hc-pill {
+  border-radius: var(--hc-radius-pill);
+}

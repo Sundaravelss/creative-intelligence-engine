@@ -1,0 +1,42 @@
+version: "3.9"
+
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    image: cie/web
+    container_name: cie-web
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_BASE_URL: http://api:8100
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+  api:
+    build:
+      context: ..
+      dockerfile: services/api/Dockerfile
+    image: cie/api
+    container_name: cie-api
+    environment:
+      PYTHONUNBUFFERED: "1"
+    env_file:
+      - ../.env
+    ports:
+      - "8100:8100"
+
+  scheduler:
+    build:
+      context: ..
+      dockerfile: services/scheduler/Dockerfile
+    image: cie/scheduler
+    container_name: cie-scheduler
+    environment:
+      PYTHONUNBUFFERED: "1"
+    env_file:
+      - ../.env
+    depends_on:
+      - api

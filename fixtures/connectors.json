@@ -1,0 +1,215 @@
+[
+  {
+    "id": "tavily",
+    "name": "Tavily",
+    "category": "research",
+    "status": "connected",
+    "lastSync": "2026-05-16T12:00:00Z",
+    "icon": "search",
+    "description": "Real-time search, extraction, research"
+  },
+  {
+    "id": "pioneer",
+    "name": "Pioneer (LLM)",
+    "category": "ai-backends",
+    "status": "connected",
+    "lastSync": "2026-05-16T12:00:00Z",
+    "icon": "brain",
+    "description": "Pioneer fine-tuned marketing model"
+  },
+  {
+    "id": "openai",
+    "name": "OpenAI",
+    "category": "ai-backends",
+    "status": "connected",
+    "lastSync": "2026-05-16T12:00:00Z",
+    "icon": "brain",
+    "description": "GPT-4o models"
+  },
+  {
+    "id": "fal",
+    "name": "FAL",
+    "category": "ai-backends",
+    "status": "connected",
+    "lastSync": "2026-05-16T12:00:00Z",
+    "icon": "image",
+    "description": "FLUX, Sora 2, Kling, Veo image+video models"
+  },
+  {
+    "id": "claude-code",
+    "name": "Claude Code",
+    "category": "ai-backends",
+    "status": "not-connected",
+    "icon": "terminal",
+    "description": "Local Claude Code CLI"
+  },
+  {
+    "id": "hermes",
+    "name": "Hermes (Nous)",
+    "category": "ai-backends",
+    "status": "not-connected",
+    "icon": "brain",
+    "description": "Hermes 4 70B via Together"
+  },
+  {
+    "id": "meta-ads",
+    "name": "Meta Ads",
+    "category": "ad-platforms",
+    "status": "connected",
+    "icon": "facebook",
+    "description": "Facebook + Instagram paid ads",
+    "lastSync": "2026-05-16T12:37:39Z"
+  },
+  {
+    "id": "tiktok-ads",
+    "name": "TikTok Ads",
+    "category": "ad-platforms",
+    "status": "not-connected",
+    "icon": "music",
+    "description": "TikTok paid ads platform"
+  },
+  {
+    "id": "google-ads",
+    "name": "Google Ads",
+    "category": "ad-platforms",
+    "status": "not-connected",
+    "icon": "search",
+    "description": "Search and Display ads"
+  },
+  {
+    "id": "linkedin-ads",
+    "name": "LinkedIn Ads",
+    "category": "ad-platforms",
+    "status": "coming-soon",
+    "icon": "linkedin",
+    "description": "B2B paid campaigns"
+  },
+  {
+    "id": "instagram",
+    "name": "Instagram",
+    "category": "social",
+    "status": "not-connected",
+    "icon": "instagram",
+    "description": "Organic posts and stories"
+  },
+  {
+    "id": "tiktok",
+    "name": "TikTok",
+    "category": "social",
+    "status": "not-connected",
+    "icon": "music",
+    "description": "Organic short-form video"
+  },
+  {
+    "id": "linkedin",
+    "name": "LinkedIn",
+    "category": "social",
+    "status": "not-connected",
+    "icon": "linkedin",
+    "description": "Organic posts and articles"
+  },
+  {
+    "id": "x",
+    "name": "X",
+    "category": "social",
+    "status": "not-connected",
+    "icon": "twitter",
+    "description": "Organic posts and threads"
+  },
+  {
+    "id": "facebook",
+    "name": "Facebook",
+    "category": "social",
+    "status": "not-connected",
+    "icon": "facebook",
+    "description": "Organic page posts"
+  },
+  {
+    "id": "youtube",
+    "name": "YouTube",
+    "category": "social",
+    "status": "not-connected",
+    "icon": "youtube",
+    "description": "Long-form and shorts"
+  },
+  {
+    "id": "ga4",
+    "name": "Google Analytics 4",
+    "category": "analytics",
+    "status": "not-connected",
+    "icon": "bar-chart",
+    "description": "Web + app analytics"
+  },
+  {
+    "id": "mixpanel",
+    "name": "Mixpanel",
+    "category": "analytics",
+    "status": "not-connected",
+    "icon": "trending-up",
+    "description": "Product analytics"
+  },
+  {
+    "id": "shopify",
+    "name": "Shopify",
+    "category": "commerce",
+    "status": "not-connected",
+    "icon": "shopping-bag",
+    "description": "Storefront + orders"
+  },
+  {
+    "id": "woocommerce",
+    "name": "WooCommerce",
+    "category": "commerce",
+    "status": "coming-soon",
+    "icon": "shopping-cart",
+    "description": "WordPress commerce"
+  },
+  {
+    "id": "exa",
+    "name": "Exa",
+    "category": "research",
+    "status": "not-connected",
+    "icon": "search",
+    "description": "Neural search API"
+  },
+  {
+    "id": "firecrawl",
+    "name": "Firecrawl",
+    "category": "research",
+    "status": "not-connected",
+    "icon": "spider",
+    "description": "Web scraping and crawling"
+  },
+  {
+    "id": "klaviyo",
+    "name": "Klaviyo",
+    "category": "email-crm",
+    "status": "not-connected",
+    "icon": "mail",
+    "description": "Email + SMS marketing"
+  },
+  {
+    "id": "hubspot",
+    "name": "HubSpot",
+    "category": "email-crm",
+    "status": "not-connected",
+    "icon": "users",
+    "description": "CRM and marketing hub"
+  },
+  {
+    "id": "mailchimp",
+    "name": "Mailchimp",
+    "category": "email-crm",
+    "status": "not-connected",
+    "icon": "mail",
+    "description": "Email campaigns"
+  },
+  {
+    "id": "segment",
+    "name": "Segment",
+    "category": "email-crm",
+    "status": "not-connected",
+    "icon": "git-branch",
+    "description": "Customer data platform"
+  }
+]

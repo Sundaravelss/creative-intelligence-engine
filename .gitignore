@@ -1,0 +1,43 @@
+# Node
+node_modules/
+.next/
+dist/
+build/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+*.egg-info/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Runtime-mutated fixtures
+fixtures/posts.json
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Misc
+.turbo/
+coverage/
+
+# External siblings (kept private — contain logged-in shopos/higgsfield captures)
+research/
+browser-harness/
+
+# Playwright
+test-results/
+playwright-report/
