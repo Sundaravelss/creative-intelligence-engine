@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 
 import { avatarFor } from "@/lib/agentAvatars";
@@ -29,8 +30,9 @@ const ADAPTER_LABEL: Record<AgentDescriptor["adapter"], string> = {
 export function AgentCard({ agent }: AgentCardProps) {
   const portrait = avatarFor(agent.id);
   return (
-    <article
-      className="hc-glass hc-card group relative flex flex-col gap-3 overflow-hidden border border-[color:var(--color-border)] p-5"
+    <Link
+      href={`/agents/${agent.id}`}
+      className="hc-glass hc-card group relative flex cursor-pointer flex-col gap-3 overflow-hidden border border-[color:var(--color-border)] p-5 transition hover:-translate-y-0.5 hover:border-[color:var(--hc-accent-coral)] hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--hc-accent-coral)]"
       data-testid="cie-agent-card"
     >
       <div
@@ -68,6 +70,6 @@ export function AgentCard({ agent }: AgentCardProps) {
       <p className="text-sm leading-relaxed text-muted-foreground">
         {agent.tagline}
       </p>
-    </article>
+    </Link>
   );
 }

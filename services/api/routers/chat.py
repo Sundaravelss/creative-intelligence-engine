@@ -1,7 +1,8 @@
-"""Chat session persistence router.
+"""Chat router.
 
-Endpoints (prefix ``/api/chat``):
+Two surfaces under ``/api/chat``:
 
+Session persistence (existing):
 - ``GET    /sessions``                    — list (most recent first, ≤ limit)
 - ``POST   /sessions``                    — create empty session, returns id
 - ``GET    /sessions/{id}``               — session + ordered messages
@@ -9,23 +10,51 @@ Endpoints (prefix ``/api/chat``):
 - ``DELETE /sessions/{id}``               — delete session + cascade messages
 - ``POST   /sessions/{id}/messages``      — append one message
 
+Chat completions (new):
+- ``POST   /completions``                 — SSE stream of LLM reply + image gen
+                                            Used by Studio + ``/agents/[id]``.
+
 The frontend calls these from ``apps/web/lib/chat.ts``. Append is debounced
 client-side (~250ms) so SSE token streams don't hammer the DB.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import secrets
+import sys
+import uuid
 from datetime import datetime, timezone
-from typing import Any
+from pathlib import Path
+from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import delete, select
 
 from db import session_scope  # type: ignore[import-not-found]
 from models_db import ChatMessage, ChatSession  # type: ignore[import-not-found]
+from sse import event_stream  # type: ignore[import-not-found]
+
+# Allow `from agents.*` imports when uvicorn is launched from services/api/.
+_SERVICES_DIR = Path(__file__).resolve().parent.parent.parent
+if str(_SERVICES_DIR) not in sys.path:
+    sys.path.insert(0, str(_SERVICES_DIR))
+
+from agents import runtime as agent_runtime  # noqa: E402
+from agents import registry as _registry  # noqa: E402, F401  (side-effect import)
+from agents.contract import (  # noqa: E402
+    AdapterExecutionContext,
+    AgentSpec,
+    RuntimeState,
+)
+from agents.personas import PERSONAS, get_persona  # noqa: E402
+
+# FAL adapter — imported lazily inside the handler so test fixtures can monkey
+# -patch `services.api.adapters_gen.fal.stream_generate` without paying the
+# import cost when the chat router is mounted in a no-FAL test.
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -251,6 +280,372 @@ async def append_message(
             payload=body.payload,
             created_at=msg.created_at,
         )
+
+
+# ---------------------------------------------------------------------------
+# Chat completions endpoint — POST /api/chat/completions
+# ---------------------------------------------------------------------------
+
+
+class ChatMessageInput(BaseModel):
+    role: str  # "user" | "assistant" | "system"
+    content: str
+
+
+class ChatCompletionsInput(BaseModel):
+    messages: list[ChatMessageInput] = Field(default_factory=list)
+    agent_id: str | None = None
+    session_id: str | None = None
+    adapter: str | None = None
+
+
+# Sentinel-tag protocol: persona emits `<image prompt="..." aspect="9:16"/>`
+# inline. The streaming chunk parser in ``_consume_stream`` detects the tag,
+# pauses text passthrough until the closing `/>`, and dispatches FAL.
+_IMAGE_TAG_PATTERN = re.compile(
+    r"""
+    <image\s+                                # opening
+    (?:[^>]*\s)?                             # ignore extra attributes
+    prompt\s*=\s*"(?P<prompt>[^"]*)"         # required prompt
+    (?:[^>]*\s)?
+    (?:aspect\s*=\s*"(?P<aspect>[^"]*)")?    # optional aspect
+    [^>]*
+    />                                       # self-closing
+    """,
+    re.VERBOSE | re.IGNORECASE | re.DOTALL,
+)
+
+# Default FAL image model when persona doesn't specify one. Cheap + fast.
+_DEFAULT_FAL_MODEL = "fal-ai/flux/schnell"
+
+_ASPECT_TO_IMAGE_SIZE: dict[str, str] = {
+    "9:16": "portrait_16_9",
+    "16:9": "landscape_16_9",
+    "1:1": "square_hd",
+    "4:5": "portrait_4_3",
+}
+
+
+def _build_user_prompt(messages: list[ChatMessageInput]) -> str:
+    """Flatten message history into a single prompt string for adapters that
+    don't support multi-turn natively (e.g. claude_code subprocess).
+
+    The persona's ``system_prompt`` is injected separately via
+    ``AgentSpec.instructions``; here we just concatenate the conversation.
+    """
+    lines: list[str] = []
+    for m in messages:
+        role = m.role.lower().strip()
+        if role == "user":
+            lines.append(f"User: {m.content}")
+        elif role == "assistant":
+            lines.append(f"Assistant: {m.content}")
+        elif role == "system":
+            # System lines from the client are advisory only — the persona's
+            # system_prompt always wins.
+            lines.append(f"[system note: {m.content}]")
+    lines.append("Assistant:")
+    return "\n\n".join(lines)
+
+
+async def _generate_image(
+    prompt: str, aspect: str | None
+) -> tuple[str | None, str | None]:
+    """Submit a FAL request and return (url, error). Network-bound; ~5-30 s."""
+    from adapters_gen import fal  # type: ignore[import-not-found]
+
+    model_id = _DEFAULT_FAL_MODEL
+    params: dict[str, Any] = {"prompt": prompt}
+    image_size = _ASPECT_TO_IMAGE_SIZE.get((aspect or "1:1").strip())
+    if image_size:
+        params["image_size"] = image_size
+
+    try:
+        completed: dict[str, Any] | None = None
+        async for evt in fal.stream_generate(model_id, params):
+            phase = evt.get("phase")
+            if phase == "completed":
+                completed = evt.get("result") or {}
+                break
+            if phase == "error":
+                return None, str(evt.get("error") or "fal_unknown_error")
+        if not completed:
+            return None, "fal_no_result"
+        url = fal.extract_artifact_url(completed)
+        if not url:
+            return None, "fal_no_url"
+        return url, None
+    except Exception as exc:  # noqa: BLE001 — surface as text
+        logger.exception("FAL stream_generate failed")
+        return None, str(exc)
+
+
+async def _drive_chat_stream(
+    body: ChatCompletionsInput,
+) -> AsyncIterator[dict[str, Any]]:
+    """Top-level async generator: yields SSE events for one chat turn.
+
+    Pipeline:
+      1. Look up persona (404 if agent_id given but unknown).
+      2. Spawn the LLM via runtime.execute, draining its on_log queue.
+      3. Stream chunks to the client as text_delta — but watch for the image
+         sentinel tag. When found:
+           a. emit `tool_use` (chip)
+           b. await FAL via _generate_image
+           c. emit `artifact`
+           d. resume passthrough
+      4. After the LLM task ends, emit text_done + done.
+
+    Failure modes:
+      - adapter raises → runtime catches and falls through; if the whole
+        chain fails, runtime returns exit_code=0 with provider="none" and
+        empty text. We still emit a graceful done.
+      - FAL fails → emit artifact with error metadata; the chat continues.
+    """
+    persona = get_persona(body.agent_id)
+    if body.agent_id and body.agent_id not in PERSONAS:
+        raise HTTPException(status_code=404, detail=f"Unknown agent_id: {body.agent_id}")
+
+    run_id = f"chat_{secrets.token_hex(6)}"
+    yield {
+        "type": "started",
+        "agentId": persona.id,
+        "agentName": persona.name,
+        "runId": run_id,
+    }
+
+    # Build the AdapterExecutionContext.
+    # Studio is a Claude-first chat surface — claude_code is the default
+    # adapter for chat-completions regardless of DEFAULT_ADAPTER env (which
+    # the campaign orchestrator at /api/agents/campaign still respects).
+    # Caller can still override per-request via body.adapter.
+    prompt = _build_user_prompt(body.messages)
+    config: dict[str, Any] = {"adapter": body.adapter or "claude_code"}
+
+    runtime_state = RuntimeState(session_id=body.session_id)
+
+    chunk_queue: asyncio.Queue[tuple[str, str | None]] = asyncio.Queue()
+
+    async def _on_log(stream: str, chunk: str) -> None:
+        # Drop stderr + bracketed status lines (same filter as the
+        # orchestrator's streaming wrapper).
+        if stream != "stdout" or not chunk:
+            return
+        stripped = chunk.lstrip()
+        if not stripped or stripped.startswith("["):
+            return
+        await chunk_queue.put(("delta", chunk))
+
+    ctx = AdapterExecutionContext(
+        run_id=run_id,
+        agent=AgentSpec(
+            id=persona.id,
+            name=persona.name,
+            role=persona.role,
+            instructions=persona.system_prompt,
+            adapter_type=body.adapter or "claude_code",
+        ),
+        runtime=runtime_state,
+        config=config,
+        context={"prompt": prompt},
+        on_log=_on_log,
+    )
+
+    loop = asyncio.get_running_loop()
+    llm_task = asyncio.create_task(agent_runtime.execute(ctx))
+    llm_task.add_done_callback(
+        lambda _t: loop.call_soon_threadsafe(chunk_queue.put_nowait, ("end", None))
+    )
+
+    # Buffered-passthrough sentinel parser. We hold back the LAST `_HOLDBACK`
+    # chars of the stream so a partial `<image ...` straddling chunks doesn't
+    # leak through as text_delta. When a complete tag matches inside the
+    # buffer, we emit the prose before it as text_delta, dispatch FAL, then
+    # continue with the prose after.
+    _HOLDBACK = 256
+    pending = ""
+    full_text_parts: list[str] = []
+
+    async def _flush_safe(final: bool = False) -> AsyncIterator[dict[str, Any]]:
+        """Emit any prose from `pending` that's safe to send (no truncated tag).
+
+        On final flush, emit everything that's left. When an image sentinel
+        is matched, fan out to 3 FAL variants in parallel (editorial /
+        golden-hour / overcast) and emit one tool_use + one artifact per
+        variant, all sharing a `shotId` so the canvas carousel groups them.
+        """
+        nonlocal pending
+        while True:
+            match = _IMAGE_TAG_PATTERN.search(pending)
+            if match:
+                before = pending[: match.start()]
+                if before:
+                    full_text_parts.append(before)
+                    yield {
+                        "type": "text_delta",
+                        "nodeId": persona.id,
+                        "agentId": persona.id,
+                        "chunk": before,
+                    }
+                tag_prompt = (match.group("prompt") or "").strip()
+                tag_aspect = (match.group("aspect") or "1:1").strip()
+                shot_id = f"shot_{uuid.uuid4().hex[:8]}"
+
+                # Fan out 3 style variants in parallel. Each variant suffixes
+                # the persona's prompt with a distinct treatment so FAL
+                # produces visibly different results.
+                variants = (
+                    ("editorial", "editorial photography, clean composition, neutral palette"),
+                    ("golden-hour", "golden hour sunlight, warm tones, soft long shadows"),
+                    ("overcast", "overcast daylight, muted high-key colors, even lighting"),
+                )
+                tool_use_ids = [f"tool_{uuid.uuid4().hex[:10]}" for _ in variants]
+
+                # Announce all 3 generations up front so the chat shows 3 chips.
+                for (label, _suffix), tool_use_id in zip(variants, tool_use_ids):
+                    yield {
+                        "type": "tool_use",
+                        "tool": "generate_image",
+                        "toolUseId": tool_use_id,
+                        "input": {
+                            "prompt": tag_prompt,
+                            "aspect": tag_aspect,
+                            "variantLabel": label,
+                        },
+                    }
+
+                async def _gen_variant(
+                    label: str, suffix: str
+                ) -> tuple[str, str, str | None, str | None]:
+                    full_prompt = f"{tag_prompt}, {suffix}"
+                    url, err = await _generate_image(full_prompt, tag_aspect)
+                    return label, full_prompt, url, err
+
+                results = await asyncio.gather(
+                    *[_gen_variant(lbl, sfx) for (lbl, sfx) in variants]
+                )
+
+                for i, (label, full_prompt, url, err) in enumerate(results):
+                    artifact_id = f"art_{uuid.uuid4().hex[:10]}"
+                    yield {
+                        "type": "artifact",
+                        "artifact": {
+                            "id": artifact_id,
+                            "kind": "image",
+                            "name": f"{label.title()} — {tag_prompt[:50]}",
+                            "url": url or "",
+                            "shotId": shot_id,
+                            "variantId": f"{shot_id}-v{i}",
+                            "variantLabel": label,
+                            "meta": {
+                                "tool_use_id": tool_use_ids[i],
+                                "aspect": tag_aspect,
+                                "prompt": full_prompt,
+                                "variantLabel": label,
+                                "shotId": shot_id,
+                                "error": err,
+                            },
+                        },
+                    }
+                pending = pending[match.end():]
+                continue
+
+            if final:
+                if pending:
+                    full_text_parts.append(pending)
+                    yield {
+                        "type": "text_delta",
+                        "nodeId": persona.id,
+                        "agentId": persona.id,
+                        "chunk": pending,
+                    }
+                pending = ""
+            else:
+                # Hold back the tail; release everything older than _HOLDBACK
+                # so a partial tag straddling chunks isn't leaked.
+                if len(pending) > _HOLDBACK:
+                    safe_len = len(pending) - _HOLDBACK
+                    safe = pending[:safe_len]
+                    full_text_parts.append(safe)
+                    yield {
+                        "type": "text_delta",
+                        "nodeId": persona.id,
+                        "agentId": persona.id,
+                        "chunk": safe,
+                    }
+                    pending = pending[safe_len:]
+            return
+
+    while True:
+        kind, payload = await chunk_queue.get()
+        if kind == "delta" and payload:
+            pending += payload
+            async for evt in _flush_safe():
+                yield evt
+            continue
+        # kind == "end"
+        async for evt in _flush_safe(final=True):
+            yield evt
+        break
+
+    # Surface any LLM error so the client can show it (the orchestrator's
+    # graceful all-failed result still has exit_code=0; we treat that as
+    # success).
+    try:
+        result = llm_task.result()
+        meta_failed = (result.result_json or {}).get("meta", {}).get(
+            "all_adapters_failed"
+        )
+    except BaseException as exc:  # noqa: BLE001
+        meta_failed = True
+        logger.exception("chat completions LLM task raised: %s", exc)
+
+    yield {
+        "type": "text_done",
+        "nodeId": persona.id,
+        "agentId": persona.id,
+        "fullText": "".join(full_text_parts),
+    }
+    yield {
+        "type": "done",
+        "runId": run_id,
+        "agentId": persona.id,
+        "all_adapters_failed": bool(meta_failed),
+    }
+
+
+@router.post("/completions")
+async def chat_completions(body: ChatCompletionsInput) -> Any:
+    """Stream a chat reply (with optional inline image generation) as SSE.
+
+    Used by Studio (`/studio`) and per-agent chats (`/agents/[id]`). The
+    legacy 6-node orchestrator at ``/api/agents/campaign`` is unchanged —
+    that's reserved for the future "Run full campaign" button.
+    """
+    # Validate agent_id synchronously BEFORE the SSE stream starts so a bad
+    # id returns a clean 404 instead of half-streaming an error event.
+    if body.agent_id and body.agent_id not in PERSONAS:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown agent_id: {body.agent_id}"
+        )
+
+    async def _events() -> AsyncIterator[dict[str, str]]:
+        import json
+
+        try:
+            async for evt in _drive_chat_stream(body):
+                yield {
+                    "event": str(evt.get("type", "message")),
+                    "data": json.dumps(evt, default=str),
+                }
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("chat completions failed")
+            yield {
+                "event": "error",
+                "data": json.dumps({"type": "error", "error": str(exc)}),
+            }
+
+    return event_stream(_events())
 
 
 __all__ = ["router"]

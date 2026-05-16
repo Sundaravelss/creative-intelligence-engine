@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { PlusMenu } from "../PlusMenu";
 
 const ADAPTERS: Array<{ id: string; label: string }> = [
+  { id: "claude_code", label: "Claude Code" },
   { id: "openai", label: "OpenAI" },
   { id: "pioneer", label: "Pioneer" },
   { id: "hermes", label: "Hermes" },
@@ -64,9 +65,6 @@ export function ComposerFooter({
     }
   }
 
-  const adapterLabel =
-    ADAPTERS.find((a) => a.id === adapter)?.label ?? "Execute";
-
   const handleSchedule = () => {
     onSchedule?.(text);
   };
@@ -108,7 +106,7 @@ export function ComposerFooter({
                 size="sm"
                 className="h-8 gap-1 rounded-full border-black/10 bg-white/70 text-[12px] font-medium hover:bg-white"
               >
-                Execute · {adapterLabel}
+                Execute
                 <ChevronDown className="h-3 w-3" />
               </Button>
             </DropdownMenuTrigger>

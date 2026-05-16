@@ -9,7 +9,7 @@ interface ChatRailProps {
   thread: ChatMessage[];
   projectName: string;
   live: boolean;
-  modelLabel: string;
+  modelLabel?: string;
   adapter: string;
   setAdapter: (id: string) => void;
   onSubmit: (text: string) => void;

@@ -131,3 +131,203 @@ def test_append_to_unknown_session_returns_404(client: TestClient) -> None:
         json={"kind": "user", "payload": {"content": "hi"}},
     )
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# /api/chat/completions tests — sentinel-tag image-gen, persona threading
+# ---------------------------------------------------------------------------
+
+
+def _parse_sse(body: str) -> list[tuple[str, dict]]:
+    """Tiny SSE parser. Returns [(event_name, parsed_data), ...].
+
+    sse-starlette emits events terminated by ``\\r\\n\\r\\n``; we normalise to
+    ``\\n`` first so this parser handles both line endings.
+    """
+    import json
+
+    body = body.replace("\r\n", "\n")
+    out: list[tuple[str, dict]] = []
+    for block in body.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        evt = "message"
+        data_lines: list[str] = []
+        for line in block.splitlines():
+            if line.startswith("event:"):
+                evt = line.split(":", 1)[1].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.split(":", 1)[1].strip())
+        try:
+            payload = json.loads("\n".join(data_lines)) if data_lines else {}
+        except json.JSONDecodeError:
+            payload = {}
+        out.append((evt, payload))
+    return out
+
+
+def _patch_runtime_with_text(
+    monkeypatch: pytest.MonkeyPatch, text: str
+) -> list[dict]:
+    """Replace agents.runtime.execute with a fake that streams `text` via
+    on_log then returns. Returns a list captured calls can append to.
+    """
+    captured: list[dict] = []
+
+    async def _fake_execute(ctx):  # type: ignore[no-untyped-def]
+        captured.append(
+            {
+                "agent_id": ctx.agent.id,
+                "instructions": ctx.agent.instructions,
+                "prompt": ctx.context.get("prompt"),
+                "adapter": ctx.config.get("adapter"),
+            }
+        )
+        if ctx.on_log is not None:
+            # Push the entire response in 4 chunks so the parser must accumulate.
+            n = max(1, len(text) // 4)
+            for i in range(0, len(text), n):
+                await ctx.on_log("stdout", text[i : i + n])
+        from agents.contract import AdapterExecutionResult, UsageSummary
+
+        return AdapterExecutionResult(
+            exit_code=0,
+            usage=UsageSummary(),
+            result_json={"text": text, "provider": "fake"},
+        )
+
+    from agents import runtime as agent_runtime
+
+    monkeypatch.setattr(agent_runtime, "execute", _fake_execute)
+    return captured
+
+
+@pytest.mark.unit
+def test_chat_completions_streams_plain_reply(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-image prompt produces text_delta + text_done + done events."""
+    _patch_runtime_with_text(monkeypatch, "Hi! I can help you with that.")
+
+    resp = client.post(
+        "/api/chat/completions",
+        json={"messages": [{"role": "user", "content": "Hi, who are you?"}]},
+    )
+    assert resp.status_code == 200, resp.text
+    events = _parse_sse(resp.text)
+    types = [e for e, _ in events]
+    assert "started" in types
+    assert "text_delta" in types
+    assert "text_done" in types
+    assert "done" in types
+    # No image generation triggered.
+    assert "tool_use" not in types
+    assert "artifact" not in types
+
+    # Joined text matches what the fake adapter streamed.
+    deltas = [d["chunk"] for e, d in events if e == "text_delta"]
+    assert "".join(deltas) == "Hi! I can help you with that."
+
+    final = next(d for e, d in events if e == "text_done")
+    assert final["fullText"] == "Hi! I can help you with that."
+
+
+@pytest.mark.unit
+def test_chat_completions_dispatches_fal_on_image_sentinel(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the persona emits `<image .../>`, the backend calls FAL and
+    emits tool_use + artifact, with the tag itself stripped from text."""
+    sample = (
+        'Sure, here\'s an editorial take — '
+        '<image prompt="wool sneakers on cobblestone, golden hour" aspect="1:1" /> '
+        "Hope that captures the mood."
+    )
+    _patch_runtime_with_text(monkeypatch, sample)
+
+    # Monkey-patch the chat router's FAL helper so we don't hit network.
+    from routers import chat as chat_router
+
+    async def _fake_generate(prompt: str, aspect: str | None):
+        return ("https://cdn.fal.test/img.png", None)
+
+    monkeypatch.setattr(chat_router, "_generate_image", _fake_generate)
+
+    resp = client.post(
+        "/api/chat/completions",
+        json={"messages": [{"role": "user", "content": "Show me wool runners"}]},
+    )
+    assert resp.status_code == 200, resp.text
+    events = _parse_sse(resp.text)
+    types = [e for e, _ in events]
+    # 3 variants per sentinel: editorial / golden-hour / overcast.
+    assert types.count("tool_use") == 3
+    assert types.count("artifact") == 3
+
+    tool_uses = [d for e, d in events if e == "tool_use"]
+    assert all(tu["tool"] == "generate_image" for tu in tool_uses)
+    assert all("wool sneakers" in tu["input"]["prompt"] for tu in tool_uses)
+    # Variant labels show up in tool_use input for the chat to render distinct chips.
+    labels = sorted(tu["input"]["variantLabel"] for tu in tool_uses)
+    assert labels == ["editorial", "golden-hour", "overcast"]
+
+    artifacts = [d["artifact"] for e, d in events if e == "artifact"]
+    assert len(artifacts) == 3
+    # All 3 share the same shotId so the carousel groups them as variants.
+    shot_ids = {a["shotId"] for a in artifacts}
+    assert len(shot_ids) == 1
+    # All 3 carry distinct variantIds and the mocked URL.
+    assert all(a["url"] == "https://cdn.fal.test/img.png" for a in artifacts)
+    assert len({a["variantId"] for a in artifacts}) == 3
+    assert {a["variantLabel"] for a in artifacts} == {
+        "editorial",
+        "golden-hour",
+        "overcast",
+    }
+
+    # The literal `<image .../>` substring must NOT appear in any text_delta —
+    # the parser swallows it.
+    deltas = [d["chunk"] for e, d in events if e == "text_delta"]
+    joined = "".join(deltas)
+    assert "<image" not in joined
+    assert "/>" not in joined
+    assert joined.startswith("Sure, here's an editorial take —")
+    assert joined.endswith("Hope that captures the mood.")
+
+
+@pytest.mark.unit
+def test_chat_completions_threads_persona_system_prompt(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each agent_id sends a distinct system prompt to the adapter."""
+    captured = _patch_runtime_with_text(monkeypatch, "Got it.")
+
+    resp = client.post(
+        "/api/chat/completions",
+        json={
+            "messages": [{"role": "user", "content": "Plan a launch."}],
+            "agent_id": "strategist",
+        },
+    )
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    instructions = captured[0]["instructions"]
+    # The Mira Vox persona prompt is recognizable.
+    assert "Mira Vox" in instructions
+    assert "strategist" in instructions.lower()
+    assert captured[0]["agent_id"] == "strategist"
+
+
+@pytest.mark.unit
+def test_chat_completions_unknown_agent_id_returns_404(client: TestClient) -> None:
+    resp = client.post(
+        "/api/chat/completions",
+        json={
+            "messages": [{"role": "user", "content": "Hi"}],
+            "agent_id": "nonexistent_persona_id",
+        },
+    )
+    assert resp.status_code == 404
+    body = resp.json()
+    assert "nonexistent_persona_id" in str(body.get("detail", ""))

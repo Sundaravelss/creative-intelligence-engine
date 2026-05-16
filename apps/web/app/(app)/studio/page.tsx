@@ -24,7 +24,12 @@ import { ScheduleModal } from "@/components/loops/ScheduleModal";
 import { api } from "@/lib/api";
 import { useBrand } from "@/lib/brand";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+// In dev the FastAPI backend runs on :8100 (separate process). When
+// NEXT_PUBLIC_API_BASE_URL is unset we default to that so the campaign POST
+// hits the real adapter pipeline instead of falling through to the synthetic
+// fallback (the picsum landscapes the user kept seeing).
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8100";
 
 const PROJECT_NAME = "Marketing Image Generation for Bags";
 
@@ -55,7 +60,7 @@ const REASONING_BY_NODE: Record<string, string> = {
   strategist:
     "Reading the brief — bags, marketing imagery. Mapping audience: design-led shoppers, urban, late-20s. Pulling 3 hook angles: heritage craft, daily-carry utility, statement silhouette.",
   creative_director:
-    "Picking format mix (9:16 hero + 1:1 supporting). Reserving budget for 3 variants per shot: editorial, golden-hour, overcast. Variants will be scored side by side.",
+    "Picking format mix (9:16 hero + 1:1 supporting). Reserving budget for 3 style variants per shot. Variants will be scored side by side.",
   art_director:
     "Composing shot list. Flagging references: Helmut Newton's hard light, Margiela atelier flatlays, Saul Leiter colour blocking. Routing to Nano Banana 2 (Flash Im) for variants.",
   analyst:
@@ -90,6 +95,15 @@ interface SsePayload {
   totalSubsteps?: number;
   completedSubsteps?: number;
   substeps?: Array<{ label: string; status: "joined" | "done" | "failed" }>;
+  // v4 streaming events (text_delta / text_done) — per-token reasoning prose.
+  chunk?: string;
+  // v5 chat-completions sentinel-tag image-gen tool_use event.
+  tool?: string;
+  toolUseId?: string;
+  input?: { prompt?: string; aspect?: string };
+  // /api/chat/completions adds runId on `started` + `done`.
+  runId?: string;
+  agentName?: string;
 }
 
 function uid(prefix: string): string {
@@ -121,7 +135,9 @@ function StudioPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const adapterParam = searchParams?.get("adapter") ?? "openai";
+  // Default to claude_code; tolerate the historical "claude" alias.
+  const rawAdapterParam = searchParams?.get("adapter") ?? "claude_code";
+  const adapterParam = rawAdapterParam === "claude" ? "claude_code" : rawAdapterParam;
   const viewParam = (searchParams?.get("view") as CanvasViewMode) ?? "carousel";
 
   const [adapter, setAdapter] = useState<string>(adapterParam);
@@ -253,8 +269,14 @@ function StudioPageInner() {
         toast.error("A run is already streaming. Wait for it to finish.");
         return;
       }
-      // Abort any prior controller; reset run state for this turn.
-      abortRef.current?.abort();
+      // Abort any prior in-flight controller. Note: we deliberately don't
+      // abort if the prior controller already finished (signal.aborted false
+      // and no longer attached) — the manual Stop button handles user-driven
+      // cancellation explicitly via abortRef.current?.abort().
+      const prior = abortRef.current;
+      if (prior && !prior.signal.aborted) {
+        prior.abort();
+      }
       const controller = new AbortController();
       abortRef.current = controller;
       chipTimers.current.clear();
@@ -270,23 +292,22 @@ function StudioPageInner() {
       setRunning(true);
 
       try {
-        const res = await fetch(
-          `${API_BASE}/api/agents/campaign?adapter=${encodeURIComponent(adapter)}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              brief: { keyword: text },
-              brand_id: brandIdRef.current,
-              format,
-              variants_per_shot: 3,
-            }),
-            signal: controller.signal,
-          },
-        );
+        // Studio = Claude chat with FAL image-gen tool. The 6-node campaign
+        // orchestrator at /api/agents/campaign is reserved for /agents.
+        // Body shape matches services/api/routers/chat.py::ChatCompletionsInput.
+        const res = await fetch(`${API_BASE}/api/chat/completions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: [{ role: "user", content: text }],
+            // agent_id omitted → backend defaults to "sage". /agents/[id] passes its own.
+            adapter: adapter || "claude_code",
+          }),
+          signal: controller.signal,
+        });
 
         if (!res.ok || !res.body) {
-          throw new Error(`Campaign request failed: ${res.status}`);
+          throw new Error(`Chat request failed: ${res.status}`);
         }
 
         const reader = res.body.getReader();
@@ -294,17 +315,32 @@ function StudioPageInner() {
         let buffer = "";
         let genBlockOpened = false;
 
+        // Find the next event-terminator. sse-starlette uses CRLF
+        // (`\r\n\r\n`); other servers use LF (`\n\n`). Pick whichever
+        // appears first.
+        const findEventEnd = (
+          buf: string,
+        ): { idx: number; sepLen: number } => {
+          const crlf = buf.indexOf("\r\n\r\n");
+          const lf = buf.indexOf("\n\n");
+          if (crlf !== -1 && (lf === -1 || crlf < lf)) {
+            return { idx: crlf, sepLen: 4 };
+          }
+          if (lf !== -1) return { idx: lf, sepLen: 2 };
+          return { idx: -1, sepLen: 0 };
+        };
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
-          let idx = buffer.indexOf("\n\n");
-          while (idx !== -1) {
-            const block = buffer.slice(0, idx);
-            buffer = buffer.slice(idx + 2);
+          let next = findEventEnd(buffer);
+          while (next.idx !== -1) {
+            const block = buffer.slice(0, next.idx).replace(/\r\n/g, "\n");
+            buffer = buffer.slice(next.idx + next.sepLen);
             const parsed = parseSseBlock(block);
             if (!parsed) {
-              idx = buffer.indexOf("\n\n");
+              next = findEventEnd(buffer);
               continue;
             }
             const { event, data } = parsed;
@@ -314,19 +350,109 @@ function StudioPageInner() {
                 ...curr,
                 { kind: "started", id: uid("st"), ts: new Date().toISOString() },
               ]);
-            } else if (event === "thought") {
+            } else if (event === "text_delta") {
+              // Per-token streaming. The orchestrator tags every chunk with
+              // nodeId=agentId; we either append a fresh live_stream message
+              // (first chunk for this agent) or mutate the existing buffer.
+              const targetNodeId = String(data.nodeId ?? "");
+              const targetAgentId = String(data.agentId ?? targetNodeId);
+              const chunk = String(data.chunk ?? "");
+              if (!targetNodeId || !chunk) {
+                next = findEventEnd(buffer);
+                continue;
+              }
+              setThread((curr) => {
+                // Find the most recent live_stream for this agent that's
+                // still streaming. If none, append a new one.
+                for (let i = curr.length - 1; i >= 0; i--) {
+                  const m = curr[i];
+                  if (
+                    m.kind === "live_stream" &&
+                    m.agentId === targetAgentId &&
+                    m.isStreaming
+                  ) {
+                    const next = [...curr];
+                    next[i] = {
+                      ...m,
+                      finalized: m.finalized + chunk,
+                    };
+                    return next;
+                  }
+                }
+                return [
+                  ...curr,
+                  {
+                    kind: "live_stream",
+                    id: targetNodeId,
+                    agentId: targetAgentId,
+                    label: titleForNode(targetNodeId) ?? targetAgentId,
+                    finalized: chunk,
+                    isStreaming: true,
+                  },
+                ];
+              });
+            } else if (event === "text_done") {
+              // Mark the matching live_stream as finished. The next
+              // canonical event (thought / agent_step_complete) will
+              // remove it from the thread.
+              const targetAgentId = String(data.agentId ?? "");
+              setThread((curr) => {
+                for (let i = curr.length - 1; i >= 0; i--) {
+                  const m = curr[i];
+                  if (
+                    m.kind === "live_stream" &&
+                    m.agentId === targetAgentId &&
+                    m.isStreaming
+                  ) {
+                    const next = [...curr];
+                    next[i] = { ...m, isStreaming: false };
+                    return next;
+                  }
+                }
+                return curr;
+              });
+            } else if (event === "tool_use" && data.tool === "generate_image") {
+              // The persona emitted an `<image .../>` sentinel; the backend
+              // is calling FAL. Drop a "running" generation chip into the
+              // thread; the `artifact` event that follows flips it to
+              // "complete" and surfaces the image on the canvas.
+              const toolUseId = data.toolUseId ?? uid("tu");
+              const promptSummary = data.input?.prompt ?? "";
+              const chip: GenerationChipData = {
+                id: toolUseId,
+                label: "Generating image",
+                promptSummary: promptSummary.slice(0, 120),
+                modelName: "fal-ai/flux/schnell",
+                status: "running",
+                elapsedSec: 0,
+                etaSec: 12,
+              };
               setThread((curr) => [
                 ...curr,
-                {
-                  kind: "thought",
-                  id: uid("th"),
-                  agentId: data.agentId ?? "strategist",
-                  summary: data.summary ?? "",
-                  fullText: data.fullText ?? "",
-                  elapsedSec: Number(data.elapsedSec) || 0,
-                  collapsed: true,
-                },
+                { kind: "generation", id: uid("gen"), chips: [chip] },
               ]);
+            } else if (event === "thought") {
+              const targetAgentId = data.agentId ?? "strategist";
+              setThread((curr) => {
+                // Drop any live_stream for this agent — the canonical
+                // thought event supersedes the streaming buffer.
+                const filtered = curr.filter(
+                  (m) =>
+                    !(m.kind === "live_stream" && m.agentId === targetAgentId),
+                );
+                return [
+                  ...filtered,
+                  {
+                    kind: "thought",
+                    id: uid("th"),
+                    agentId: targetAgentId,
+                    summary: data.summary ?? "",
+                    fullText: data.fullText ?? "",
+                    elapsedSec: Number(data.elapsedSec) || 0,
+                    collapsed: true,
+                  },
+                ];
+              });
             } else if (event === "agent_step_start") {
               setThread((curr) => [
                 ...curr,
@@ -346,11 +472,17 @@ function StudioPageInner() {
               const completedCount = Number(data.completedSubsteps);
               const nextSubsteps = data.substeps ?? [];
               setThread((curr) => {
+                // Drop any live_stream for this agent — the canonical
+                // agent_step_complete supersedes the streaming buffer.
+                const filtered = curr.filter(
+                  (m) =>
+                    !(m.kind === "live_stream" && m.agentId === targetAgentId),
+                );
                 // Match the LAST agent_step block for this agentId that hasn't
                 // been completed yet. Walking back-to-front avoids racing past
                 // earlier blocks if the same agent runs twice in one campaign.
                 let patched = false;
-                const next = [...curr];
+                const next = [...filtered];
                 for (let i = next.length - 1; i >= 0; i--) {
                   const m = next[i];
                   if (
@@ -370,7 +502,7 @@ function StudioPageInner() {
                     break;
                   }
                 }
-                return patched ? next : curr;
+                return patched ? next : filtered;
               });
             } else if (event === "node_start" && data.nodeId) {
               const nodeId = data.nodeId;
@@ -424,6 +556,12 @@ function StudioPageInner() {
                 };
                 setArtifacts((curr) => [...curr, artifact]);
                 if (focusId === null) setFocusId(id);
+                // Seed selection for the shot the first time we see it so the
+                // canvas renders the very first variant as selected without
+                // waiting for the user to click anything.
+                setSelectedVariantByShot((curr) =>
+                  curr[shotId] ? curr : { ...curr, [shotId]: id },
+                );
 
                 const chip: GenerationChipData = {
                   id: uid("chip"),
@@ -467,14 +605,14 @@ function StudioPageInner() {
                   kind: "assistant",
                   id: uid("a"),
                   text:
-                    "Three variants are on the canvas — editorial, golden-hour, and overcast. Want me to push any of these further: swap colors, generate matching social crops, or animate the selected shot into a 6-second cut?",
+                    "Three style variants are on the canvas — pick one to lock or push further: swap colors, generate matching social crops, or animate the selected shot into a 6-second cut.",
                 },
                 { kind: "followups", id: uid("f"), items: DEFAULT_FOLLOWUPS },
               ]);
             } else if (event === "error") {
               toast.error(data.message ?? "Stream error");
             }
-            idx = buffer.indexOf("\n\n");
+            next = findEventEnd(buffer);
           }
         }
       } catch (err: unknown) {
@@ -535,6 +673,18 @@ function StudioPageInner() {
 
   const isEmpty = useMemo(() => thread.length === 0, [thread.length]);
 
+  // Derive the chat header title from the first user message — falls back to a
+  // generic placeholder when the thread is still empty. Trimmed to ~60 chars
+  // and capitalised to match the visual weight of the header.
+  const projectTitle = useMemo(() => {
+    const firstUser = thread.find((m) => m.kind === "user");
+    if (!firstUser || firstUser.kind !== "user") return "New conversation";
+    const text = firstUser.text.trim();
+    if (!text) return "New conversation";
+    const truncated = text.length > 60 ? `${text.slice(0, 57)}…` : text;
+    return truncated.charAt(0).toUpperCase() + truncated.slice(1);
+  }, [thread]);
+
   const openSchedule = useCallback((currentText: string) => {
     setScheduleSeed(currentText);
     setScheduleOpen(true);
@@ -566,9 +716,8 @@ function StudioPageInner() {
     <div className="grid h-full grid-cols-1 lg:grid-cols-[480px_1fr]">
       <ChatRail
         thread={thread}
-        projectName={PROJECT_NAME}
+        projectName={projectTitle}
         live={running}
-        modelLabel="Opus 4.7"
         adapter={adapter}
         setAdapter={setAdapterAndUrl}
         onSubmit={handleSubmit}
@@ -576,6 +725,11 @@ function StudioPageInner() {
         onChipFocus={handleChipFocus}
         onFollowup={handleFollowup}
         disabled={running}
+        isRunning={running}
+        onStop={() => {
+          abortRef.current?.abort();
+          setRunning(false);
+        }}
       />
       <LiquidCanvas
         artifacts={artifacts}
@@ -657,7 +811,7 @@ function fallbackSyntheticRun({
     },
     { kind: "generation", id: uid("gen"), chips: [] },
   ]);
-  const variants = ["Editorial", "Golden Hour", "Overcast"];
+  const variants = pickFallbackLabels(text);
   const shotId = uid("shot");
   variants.forEach((label, i) => {
     const id = `${shotId}-v${i}`;
@@ -694,8 +848,38 @@ function fallbackSyntheticRun({
     {
       kind: "assistant",
       id: uid("a"),
-      text: "Three style variants are on the canvas. The golden-hour cut is leading on hook density — want me to lock it and generate matching social crops?",
+      text: `Three style variants are on the canvas — ${variants[0]} is leading on hook density. Want me to lock it and generate matching social crops?`,
     },
     { kind: "followups", id: uid("f"), items: DEFAULT_FOLLOWUPS },
   ]);
+}
+
+/**
+ * Pick three fallback variant labels from a tiny brief-keyword heuristic.
+ * Used only when the backend is offline; production runs use the
+ * art_director-emitted style_variants. Returns 3 distinct labels.
+ */
+function pickFallbackLabels(text: string): [string, string, string] {
+  const lc = text.toLowerCase();
+  const has = (...words: string[]) => words.some((w) => lc.includes(w));
+
+  if (has("bag", "leather", "wallet", "tote", "purse", "luggage")) {
+    return ["Matte Studio", "Golden Street", "Rain Glaze"];
+  }
+  if (has("food", "kettle", "espresso", "coffee", "snack", "drink", "kitchen")) {
+    return ["Overhead Market", "Moody Candlelit", "Bright Kitchen"];
+  }
+  if (has("skin", "cream", "serum", "beauty", "cosmetic", "skincare")) {
+    return ["Clean Flatlay", "Macro Dewdrop", "Soft Daylight"];
+  }
+  if (has("shoe", "sneaker", "boot", "trainer")) {
+    return ["Studio Cyc", "Street Motion", "Court Lights"];
+  }
+  if (has("car", "auto", "vehicle", "ev")) {
+    return ["Dawn Drive", "Studio Cyc", "Highway Blur"];
+  }
+  if (has("home", "furniture", "sofa", "decor", "interior")) {
+    return ["Magazine Spread", "Morning Window", "Lifestyle Vignette"];
+  }
+  return ["Hero Shot", "Lifestyle", "Macro Detail"];
 }
