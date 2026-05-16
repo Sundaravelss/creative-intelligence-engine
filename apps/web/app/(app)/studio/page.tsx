@@ -713,7 +713,7 @@ function StudioPageInner() {
   }
 
   return (
-    <div className="grid h-full grid-cols-1 lg:grid-cols-[480px_1fr]">
+    <div className="grid h-full min-h-0 grid-cols-1 overflow-hidden lg:grid-cols-[480px_1fr]">
       <ChatRail
         thread={thread}
         projectName={projectTitle}

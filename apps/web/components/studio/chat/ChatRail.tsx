@@ -37,7 +37,7 @@ export function ChatRail({
   onStop,
 }: ChatRailProps) {
   return (
-    <aside className="flex h-full flex-col border-r border-black/5 bg-background/60 backdrop-blur-md">
+    <aside className="flex h-full min-h-0 flex-col overflow-hidden border-r border-black/5 bg-background/60 backdrop-blur-md">
       <ChatHeader
         projectName={projectName}
         live={live}

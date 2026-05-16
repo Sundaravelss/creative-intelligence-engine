@@ -32,7 +32,7 @@ export function ThreadMessageList({
   }, [thread]);
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-6">
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
       <div className="flex flex-col gap-5">
         {thread.map((msg) => {
           switch (msg.kind) {
