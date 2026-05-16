@@ -17,7 +17,21 @@ export default function ConnectorsPage() {
     try {
       setError(null);
       const data = await api.get<Connector[]>("/api/connectors");
-      setConnectors(Array.isArray(data) ? data : []);
+      // Allowlist: show only the demo-essential connectors, no matter what
+      // the backend fixture currently contains. Keeps the page tight and
+      // resilient to fixture-rewriting workflows. To surface more, append
+      // here — keep ai-backends out (driven by adapter chain, not OAuth).
+      const allow = new Set([
+        "meta-ads",
+        "tiktok-ads",
+        "google-ads",
+        "instagram",
+        "shopify",
+      ]);
+      const filtered = Array.isArray(data)
+        ? data.filter((c) => allow.has(c.id))
+        : [];
+      setConnectors(filtered);
     } catch (err: unknown) {
       const msg = err instanceof ApiError ? err.message : "Failed to load connectors";
       setError(msg);
@@ -55,8 +69,12 @@ export default function ConnectorsPage() {
   }, [connectors, modalId]);
 
   const summary = useMemo(() => {
-    const connected = connectors.filter((c) => c.status === "connected").length;
-    return `${connected} connected · ${connectors.length} total`;
+    // Exclude ai-backends so the summary matches the visible grid (the
+    // ai-backends category is hidden — see CATEGORY_ORDER in
+    // components/connectors/types.ts).
+    const visible = connectors.filter((c) => c.category !== "ai-backends");
+    const connected = visible.filter((c) => c.status === "connected").length;
+    return `${connected} connected · ${visible.length} total`;
   }, [connectors]);
 
   return (
@@ -66,7 +84,7 @@ export default function ConnectorsPage() {
           <h1 className="hc-serif-headline text-3xl font-semibold">Connectors</h1>
           <p className="text-muted-foreground mt-2 text-sm">
             Connect your marketing stack — ad platforms, social, analytics, commerce, research,
-            CRM, and AI backends.
+            and CRM.
           </p>
         </div>
         <div className="text-xs text-muted-foreground">{summary}</div>

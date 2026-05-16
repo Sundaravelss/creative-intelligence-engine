@@ -1,6 +1,13 @@
 "use client";
 
-import { FileText, Image as ImageIcon, Plug, Plus, Video } from "lucide-react";
+import {
+  CalendarClock,
+  FileText,
+  Image as ImageIcon,
+  Plug,
+  Plus,
+  Video,
+} from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,7 +18,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 
-export function PlusMenu() {
+interface PlusMenuProps {
+  /** Optional callback when "Schedule loop" is selected. */
+  onSchedule?: () => void;
+}
+
+export function PlusMenu({ onSchedule }: PlusMenuProps = {}) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -40,6 +52,10 @@ export function PlusMenu() {
         <DropdownMenuSeparator />
         <DropdownMenuItem>
           <Plug className="mr-2 h-4 w-4" /> From integration
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => onSchedule?.()}>
+          <CalendarClock className="mr-2 h-4 w-4" /> Schedule loop
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

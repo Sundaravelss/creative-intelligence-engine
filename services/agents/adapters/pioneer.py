@@ -59,8 +59,11 @@ async def execute(ctx: AdapterExecutionContext) -> AdapterExecutionResult:
         raise PioneerNotConfigured("LLM_MARKETING_MODEL_ID is not set")
 
     url = f"{base_url.rstrip('/')}/chat/completions"
+    # Pioneer accepts both Authorization: Bearer and X-API-Key. Send both so the
+    # adapter survives if their gateway flips header conventions.
     headers = {
         "Authorization": f"Bearer {api_key}",
+        "X-API-Key": api_key,
         "Content-Type": "application/json",
     }
     payload: dict[str, Any] = {

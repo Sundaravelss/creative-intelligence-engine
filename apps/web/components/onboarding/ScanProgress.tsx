@@ -52,6 +52,13 @@ interface ScanProgressProps {
   timeoutMs?: number;
 }
 
+const CAPTIONS: readonly string[] = [
+  "Reading homepage…",
+  "Looking at product pages…",
+  "Distilling brand voice with Sage…",
+  "Pulling palette from imagery…",
+];
+
 export function ScanProgress({
   url,
   onComplete,
@@ -62,7 +69,28 @@ export function ScanProgress({
   const [done, setDone] = useState<Set<Phase>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [captionIdx, setCaptionIdx] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Tick the elapsed timer + rotate captions while a scan is running.
+  useEffect(() => {
+    if (error) return; // freeze counters in error state
+    if (active === "complete") return;
+    setElapsedSec(0);
+    setCaptionIdx(0);
+    const tickElapsed = setInterval(() => setElapsedSec((s) => s + 1), 1000);
+    const tickCaption = setInterval(
+      () => setCaptionIdx((i) => (i + 1) % CAPTIONS.length),
+      2500,
+    );
+    return () => {
+      clearInterval(tickElapsed);
+      clearInterval(tickCaption);
+    };
+    // Reset on each retry; phase changes don't restart the counters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [retryToken, error]);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -198,44 +226,65 @@ export function ScanProgress({
   }
 
   return (
-    <ul className="space-y-2 rounded-2xl border border-white/40 bg-white/70 p-4 shadow-sm backdrop-blur-md">
-      {PHASE_ORDER.map((phase) => {
-        const isDone = done.has(phase) && active !== phase;
-        const isActive = active === phase && !isDone;
-        return (
-          <li
-            key={phase}
-            className="flex items-center gap-3 text-sm text-foreground"
-          >
-            <span
-              className={cn(
-                "flex size-6 items-center justify-center rounded-full transition-colors",
-                isDone &&
-                  "bg-[var(--hc-accent-coral-soft)] text-[var(--hc-accent-coral)]",
-                isActive &&
-                  "ring-2 ring-[var(--hc-accent-coral)] ring-offset-2 ring-offset-white",
-                !isDone && !isActive && "bg-muted text-muted-foreground",
-              )}
+    <div className="rounded-2xl border border-white/40 bg-white/70 p-4 shadow-sm backdrop-blur-md">
+      <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-wider text-muted-foreground">
+        <span>Scanning</span>
+        <span
+          className="rounded-full bg-muted/70 px-2 py-0.5 font-mono text-[10px] text-foreground/80"
+          aria-live="off"
+        >
+          {elapsedSec}s
+        </span>
+      </div>
+      <ul className="space-y-2">
+        {PHASE_ORDER.map((phase) => {
+          const isDone = done.has(phase) && active !== phase;
+          const isActive = active === phase && !isDone;
+          return (
+            <li
+              key={phase}
+              className="flex flex-col gap-1 text-sm text-foreground"
             >
-              {isDone ? (
-                <Check className="size-3.5" strokeWidth={3} />
-              ) : isActive ? (
-                <Loader2 className="size-3.5 animate-spin text-[var(--hc-accent-coral)]" />
-              ) : (
-                <span className="size-1.5 rounded-full bg-muted-foreground/40" />
-              )}
-            </span>
-            <span
-              className={cn(
-                isActive && "font-medium",
-                !isActive && !isDone && "text-muted-foreground",
-              )}
-            >
-              {PHASE_LABEL[phase]}
-            </span>
-          </li>
-        );
-      })}
-    </ul>
+              <div className="flex items-center gap-3">
+                <span
+                  className={cn(
+                    "flex size-6 items-center justify-center rounded-full transition-colors",
+                    isDone &&
+                      "bg-[var(--hc-accent-coral-soft)] text-[var(--hc-accent-coral)]",
+                    isActive &&
+                      "ring-2 ring-[var(--hc-accent-coral)] ring-offset-2 ring-offset-white",
+                    !isDone && !isActive && "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {isDone ? (
+                    <Check className="size-3.5" strokeWidth={3} />
+                  ) : isActive ? (
+                    <Loader2 className="size-3.5 animate-spin text-[var(--hc-accent-coral)]" />
+                  ) : (
+                    <span className="size-1.5 rounded-full bg-muted-foreground/40" />
+                  )}
+                </span>
+                <span
+                  className={cn(
+                    isActive && "font-medium",
+                    !isActive && !isDone && "text-muted-foreground",
+                  )}
+                >
+                  {PHASE_LABEL[phase]}
+                </span>
+              </div>
+              {isActive ? (
+                <p
+                  key={captionIdx}
+                  className="ml-9 animate-in fade-in text-xs italic text-muted-foreground/80"
+                >
+                  {CAPTIONS[captionIdx]}
+                </p>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }

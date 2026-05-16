@@ -163,26 +163,36 @@ export function BrandConfirmCard({
         </div>
       ) : null}
 
-      <footer className="mt-6 flex items-center justify-end gap-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onRetry}
-          disabled={proceeding}
-          className="rounded-full px-4 text-muted-foreground hover:text-foreground"
+      <footer className="mt-6 flex items-center justify-between gap-2">
+        <a
+          href="/brand?tab=wiki"
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         >
-          Retry
-        </Button>
-        <Button
-          size="sm"
-          onClick={onProceed}
-          disabled={proceeding}
-          className={cn(
-            "rounded-full bg-foreground px-5 text-background hover:bg-foreground/90",
-          )}
-        >
-          {proceeding ? "Proceeding…" : "Proceed"}
-        </Button>
+          View Brand.md →
+        </a>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onRetry}
+            disabled={proceeding}
+            className="rounded-full px-4 text-muted-foreground hover:text-foreground"
+          >
+            Retry
+          </Button>
+          <Button
+            size="sm"
+            onClick={onProceed}
+            disabled={proceeding}
+            className={cn(
+              "rounded-full bg-foreground px-5 text-background hover:bg-foreground/90",
+            )}
+          >
+            {proceeding ? "Proceeding…" : "Proceed"}
+          </Button>
+        </div>
       </footer>
     </motion.section>
   );

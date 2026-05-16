@@ -15,15 +15,30 @@ from .contract import AdapterExecutionContext, AdapterExecutionResult
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_FALLBACK_CHAIN: tuple[str, ...] = ("pioneer", "openai", "claude_code", "hermes")
+_DEFAULT_FALLBACK_CHAIN: tuple[str, ...] = (
+    "pioneer",
+    "openai",
+    "claude_code",
+    "hermes_cli",
+    "together",
+)
 
 
-def _resolve_chain(preferred: str) -> list[str]:
-    """Build the ordered adapter list with `preferred` first."""
-    env_chain = os.environ.get("ADAPTER_FALLBACK_CHAIN", "").strip()
+def _resolve_chain(preferred: str, override_chain: str = "") -> list[str]:
+    """Build the ordered adapter list with `preferred` first.
+
+    Priority for the chain itself:
+      1. ``override_chain`` (per-request, e.g. from ``ctx.config["fallback_chain"]``)
+      2. ``ADAPTER_FALLBACK_CHAIN`` env var
+      3. Built-in ``_DEFAULT_FALLBACK_CHAIN``
+    """
+    chain_str = (
+        override_chain.strip()
+        or os.environ.get("ADAPTER_FALLBACK_CHAIN", "").strip()
+    )
     chain: Iterable[str]
-    if env_chain:
-        chain = (name.strip() for name in env_chain.split(",") if name.strip())
+    if chain_str:
+        chain = (name.strip() for name in chain_str.split(",") if name.strip())
     else:
         chain = _DEFAULT_FALLBACK_CHAIN
 
@@ -58,7 +73,8 @@ async def execute(ctx: AdapterExecutionContext) -> AdapterExecutionResult:
         or os.environ.get("DEFAULT_ADAPTER", "pioneer").strip()
         or "pioneer"
     )
-    chain = _resolve_chain(preferred)
+    override_chain = str(ctx.config.get("fallback_chain") or "").strip()
+    chain = _resolve_chain(preferred, override_chain)
 
     last_error: Exception | None = None
     for name in chain:
@@ -91,9 +107,25 @@ async def execute(ctx: AdapterExecutionContext) -> AdapterExecutionResult:
 
         return result
 
+    # All adapters failed. Don't bubble a hard error to the user — return
+    # exit_code=0 with empty text + a meta flag so the campaign continues
+    # gracefully (downstream nodes parse JSON safely; the orchestrator's
+    # garbage-fallback path covers empty text). The full error chain is in
+    # the server log for the operator.
     msg = f"all adapters failed (chain={chain}): {last_error}"
     logger.error(msg)
-    return AdapterExecutionResult(exit_code=1, error=msg, result_json={"text": ""})
+    return AdapterExecutionResult(
+        exit_code=0,
+        result_json={
+            "text": "",
+            "provider": "none",
+            "meta": {
+                "all_adapters_failed": True,
+                "chain": list(chain),
+                "last_error": str(last_error) if last_error else None,
+            },
+        },
+    )
 
 
 __all__ = ["execute"]

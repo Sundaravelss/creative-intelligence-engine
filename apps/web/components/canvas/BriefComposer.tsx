@@ -1,12 +1,14 @@
 "use client";
 
-import { Loader2, Send } from "lucide-react";
+import { CalendarClock, Loader2, Send } from "lucide-react";
 import { useState } from "react";
 
 interface BriefComposerProps {
   busy?: boolean;
   disabled?: boolean;
   onSubmit: (brief: string) => void;
+  /** Open the schedule modal seeded with the current draft. */
+  onSchedule?: (currentText: string) => void;
   /** Comma-joined preview of active prompt modifiers (presets + character). */
   modifiersPreview?: string;
 }
@@ -15,6 +17,7 @@ export function BriefComposer({
   busy = false,
   disabled = false,
   onSubmit,
+  onSchedule,
   modifiersPreview,
 }: BriefComposerProps) {
   const [text, setText] = useState("");
@@ -45,19 +48,33 @@ export function BriefComposer({
         <span className="truncate text-[11px] text-[color:var(--color-muted-foreground)]">
           {modifiersPreview ? `+ ${modifiersPreview}` : "Cmd/Ctrl + Enter to launch"}
         </span>
-        <button
-          type="button"
-          onClick={submit}
-          disabled={busy || disabled || !text.trim()}
-          className="hc-glass inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[oklch(0.66_0.18_25_/_0.9)] px-3 py-1.5 text-[12px] font-medium text-white hover:bg-[oklch(0.66_0.18_25)] disabled:opacity-50"
-        >
-          {busy ? (
-            <Loader2 size={12} className="animate-spin" />
-          ) : (
-            <Send size={12} />
-          )}
-          <span>Generate storyboard</span>
-        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {onSchedule ? (
+            <button
+              type="button"
+              onClick={() => onSchedule(text)}
+              disabled={busy || disabled}
+              aria-label="Schedule loop"
+              title="Schedule this prompt as a recurring loop"
+              className="hc-glass inline-flex h-7 w-7 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-white/70 text-[color:var(--color-foreground)] hover:bg-white disabled:opacity-50"
+            >
+              <CalendarClock size={12} />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={submit}
+            disabled={busy || disabled || !text.trim()}
+            className="hc-glass inline-flex items-center gap-1.5 rounded-full bg-[oklch(0.66_0.18_25_/_0.9)] px-3 py-1.5 text-[12px] font-medium text-white hover:bg-[oklch(0.66_0.18_25)] disabled:opacity-50"
+          >
+            {busy ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <Send size={12} />
+            )}
+            <span>Generate storyboard</span>
+          </button>
+        </div>
       </div>
     </div>
   );

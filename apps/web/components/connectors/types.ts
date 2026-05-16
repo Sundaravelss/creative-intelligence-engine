@@ -29,12 +29,15 @@ export const CATEGORY_LABELS: Record<ConnectorCategory, string> = {
   "email-crm": "Email & CRM",
 };
 
+// "ai-backends" is intentionally omitted: AI provider connectivity is
+// driven by the agent runtime's adapter chain (services/agents/runtime.py)
+// rather than user-facing OAuth toggles, so it shouldn't appear here.
+//
+// We also drop categories that have no surfaced connectors in the trimmed
+// fixture (analytics / research / email-crm) so we don't render empty
+// section headers. Add categories back as connectors are reintroduced.
 export const CATEGORY_ORDER: ConnectorCategory[] = [
-  "ai-backends",
   "ad-platforms",
   "social",
-  "analytics",
   "commerce",
-  "research",
-  "email-crm",
 ];

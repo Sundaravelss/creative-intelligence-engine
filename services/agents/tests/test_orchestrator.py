@@ -154,7 +154,17 @@ async def test_runtime_fallback_chain(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls == ["boom", "ok"]
 
 
-def test_registry_has_four_adapters() -> None:
+def test_registry_has_expected_adapters() -> None:
     from agents import registry
 
-    assert set(registry.names()) >= {"pioneer", "openai", "claude_code", "hermes"}
+    names = set(registry.names())
+    # Five canonical adapters + one deprecated alias.
+    assert names >= {
+        "pioneer",
+        "openai",
+        "claude_code",
+        "hermes_cli",
+        "together",
+    }
+    # Backwards-compat alias kept until next release.
+    assert "hermes" in names

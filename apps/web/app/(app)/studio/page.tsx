@@ -20,6 +20,7 @@ import {
 } from "@/components/studio/EmptyStateHello";
 import { SpacesHintCard } from "@/components/studio/SpacesHintCard";
 import type { StudioFormat } from "@/components/studio/FormatPicker";
+import { ScheduleModal } from "@/components/loops/ScheduleModal";
 import { api } from "@/lib/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
@@ -133,6 +134,8 @@ function StudioPageInner() {
   const [running, setRunning] = useState(false);
   const [format, _setFormat] = useState<StudioFormat>("reel");
   const [brand, setBrand] = useState<BrandProfile | null>(null);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleSeed, setScheduleSeed] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const chipTimers = useRef<Map<string, number>>(new Map());
 
@@ -527,6 +530,33 @@ function StudioPageInner() {
 
   const isEmpty = useMemo(() => thread.length === 0, [thread.length]);
 
+  const openSchedule = useCallback((currentText: string) => {
+    setScheduleSeed(currentText);
+    setScheduleOpen(true);
+  }, []);
+
+  // Empty state: single centered hero, no left rail. After the first message
+  // arrives, the layout snaps into the two-pane (chat left, canvas right)
+  // shape so the hero composer is replaced by the chat thread that owns it.
+  if (isEmpty) {
+    return (
+      <div className="relative h-full">
+        <EmptyStateHello
+          brand={brand}
+          onSubmit={handleSubmit}
+          onSchedule={openSchedule}
+          disabled={running}
+        />
+        <SpacesHintCard />
+        <ScheduleModal
+          open={scheduleOpen}
+          initialPrompt={scheduleSeed}
+          onClose={() => setScheduleOpen(false)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-[480px_1fr]">
       <ChatRail
@@ -537,30 +567,25 @@ function StudioPageInner() {
         adapter={adapter}
         setAdapter={setAdapterAndUrl}
         onSubmit={handleSubmit}
+        onSchedule={openSchedule}
         onChipFocus={handleChipFocus}
         onFollowup={handleFollowup}
         disabled={running}
       />
-      {isEmpty ? (
-        <div className="relative h-full">
-          <EmptyStateHello
-            brand={brand}
-            onSubmit={handleSubmit}
-            disabled={running}
-          />
-          <SpacesHintCard />
-        </div>
-      ) : (
-        <LiquidCanvas
-          artifacts={artifacts}
-          viewMode={viewMode}
-          setViewMode={setViewMode}
-          focusId={focusId}
-          setFocusId={setFocusId}
-          selectedVariantByShot={selectedVariantByShot}
-          onSelectVariant={handleSelectVariant}
-        />
-      )}
+      <LiquidCanvas
+        artifacts={artifacts}
+        viewMode={viewMode}
+        setViewMode={setViewMode}
+        focusId={focusId}
+        setFocusId={setFocusId}
+        selectedVariantByShot={selectedVariantByShot}
+        onSelectVariant={handleSelectVariant}
+      />
+      <ScheduleModal
+        open={scheduleOpen}
+        initialPrompt={scheduleSeed}
+        onClose={() => setScheduleOpen(false)}
+      />
     </div>
   );
 }

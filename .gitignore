@@ -20,6 +20,12 @@ __pycache__/
 # Runtime-mutated fixtures
 fixtures/posts.json
 
+# SQLite chat-session DB (runtime, per-developer)
+fixtures/cie.db
+fixtures/cie.db-journal
+fixtures/cie.db-shm
+fixtures/cie.db-wal
+
 # Logs
 *.log
 npm-debug.log*

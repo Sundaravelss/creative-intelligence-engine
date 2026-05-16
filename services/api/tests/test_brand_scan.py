@@ -144,9 +144,14 @@ def test_scan_happy_path(
     async def fake_voice(prose: str) -> tuple[str, bool]:
         return ("Calm, plain-spoken voice with a focus on natural materials.", False)
 
+    async def fake_synth(**_kwargs: Any) -> tuple[None, None]:
+        # Fall through to _synthesize_voice path so the assertion suite still
+        # exercises the legacy heuristic-extractor branch unchanged.
+        return (None, None)
+
     with patch.object(brand_router, "_build_tavily_client", return_value=fake_client), patch.object(
         brand_router, "_synthesize_voice", side_effect=fake_voice
-    ):
+    ), patch.object(brand_router, "_llm_synthesize_brand", side_effect=fake_synth):
         resp = client.post("/api/brand/scan", json={"url": "https://example.com"})
 
     assert resp.status_code == 200, resp.text
@@ -187,9 +192,12 @@ def test_scan_writes_fixture_atomically(
     async def fake_voice(prose: str) -> tuple[str, bool]:
         return ("Calm, plain-spoken voice.", False)
 
+    async def fake_synth(**_kwargs: Any) -> tuple[None, None]:
+        return (None, None)
+
     with patch.object(brand_router, "_build_tavily_client", return_value=fake_client), patch.object(
         brand_router, "_synthesize_voice", side_effect=fake_voice
-    ):
+    ), patch.object(brand_router, "_llm_synthesize_brand", side_effect=fake_synth):
         resp = client.post("/api/brand/scan", json={"url": "https://example.com"})
 
     assert resp.status_code == 200
@@ -293,9 +301,13 @@ def test_scan_voice_llm_failure_still_completes(
         # Production code wraps adapter exceptions; this simulates the wrapped result.
         return ("", True)
 
+    async def synth_boom(**_kwargs: Any) -> tuple[None, None]:
+        # New v3.1 helper — return None,None to force the legacy voice fallback.
+        return (None, None)
+
     with patch.object(brand_router, "_build_tavily_client", return_value=fake_client), patch.object(
         brand_router, "_synthesize_voice", side_effect=voice_boom
-    ):
+    ), patch.object(brand_router, "_llm_synthesize_brand", side_effect=synth_boom):
         resp = client.post("/api/brand/scan", json={"url": "https://example.com"})
 
     assert resp.status_code == 200, resp.text

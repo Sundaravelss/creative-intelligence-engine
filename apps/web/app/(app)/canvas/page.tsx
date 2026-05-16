@@ -11,6 +11,7 @@ import { OneLinkBar } from "@/components/canvas/marketing/OneLinkBar";
 import { MoodboardRail } from "@/components/canvas/moodboard/MoodboardRail";
 import { PresetShelf } from "@/components/canvas/presets/PresetShelf";
 import { StoryboardGrid } from "@/components/canvas/storyboard/StoryboardGrid";
+import { ScheduleModal } from "@/components/loops/ScheduleModal";
 import {
   composePromptWithPresets,
   findPreset,
@@ -147,6 +148,8 @@ function CanvasPageInner() {
   const [running, setRunning] = useState(false);
   const [exportArtifactUrl, setExportArtifactUrl] = useState<string | null>(null);
   const [exportLabel, setExportLabel] = useState<string>("");
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleSeed, setScheduleSeed] = useState("");
 
   // Hydrate persisted pins/characters once.
   useEffect(() => {
@@ -440,6 +443,10 @@ function CanvasPageInner() {
             <BriefComposer
               busy={running}
               onSubmit={handleBriefSubmit}
+              onSchedule={(currentText) => {
+                setScheduleSeed(currentText);
+                setScheduleOpen(true);
+              }}
               modifiersPreview={modifiersPreview}
             />
           </div>
@@ -497,6 +504,12 @@ function CanvasPageInner() {
         imageUrl={exportArtifactUrl}
         label={exportLabel}
         onClose={() => setExportArtifactUrl(null)}
+      />
+
+      <ScheduleModal
+        open={scheduleOpen}
+        initialPrompt={scheduleSeed}
+        onClose={() => setScheduleOpen(false)}
       />
     </main>
   );

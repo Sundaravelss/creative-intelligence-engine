@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowUp, GitFork, Mic, Plug, Plus } from "lucide-react";
+import { ArrowUp, CalendarClock, GitFork, Mic, Plug, Plus } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { ConnectorDropdown } from "./ConnectorDropdown";
@@ -23,6 +23,8 @@ export interface BrandProfile {
 interface EmptyStateHelloProps {
   brand: BrandProfile | null;
   onSubmit: (text: string) => void;
+  /** Open the schedule modal seeded with the current draft. */
+  onSchedule?: (currentText: string) => void;
   disabled?: boolean;
 }
 
@@ -31,6 +33,7 @@ const NOISE_SVG = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/sv
 export function EmptyStateHello({
   brand,
   onSubmit,
+  onSchedule,
   disabled,
 }: EmptyStateHelloProps) {
   const [draft, setDraft] = useState("");
@@ -177,6 +180,15 @@ export function EmptyStateHello({
               className="flex size-7 items-center justify-center rounded-full border border-border/60 bg-white/80 text-muted-foreground transition-colors hover:bg-white"
             >
               <GitFork className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Schedule loop"
+              title="Schedule this prompt as a recurring loop"
+              onClick={() => onSchedule?.(draft)}
+              className="flex size-7 items-center justify-center rounded-full border border-border/60 bg-white/80 text-muted-foreground transition-colors hover:bg-white"
+            >
+              <CalendarClock className="size-3.5" />
             </button>
           </div>
         </div>

@@ -28,6 +28,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from schemas import BrandProfile
@@ -39,6 +40,7 @@ router = APIRouter(prefix="/api/brand", tags=["brand"])
 
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
 _BRAND_FILE: Final[Path] = _REPO_ROOT / "fixtures" / "brand.json"
+_BRAND_MD: Final[Path] = _REPO_ROOT / "fixtures" / "brand.md"
 _ASSETS_DIR: Final[Path] = _REPO_ROOT / "fixtures" / "assets"
 
 # Whitelist common image extensions; refuse everything else.
@@ -57,6 +59,24 @@ def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
         os.replace(tmp_name, path)
     except Exception:
         # Clean up the tmp on any error so we don't leave half-written files.
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write a UTF-8 text file atomically: tmp file in same dir, then os.replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=".brand-", suffix=".md", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            if not content.endswith("\n"):
+                fh.write("\n")
+        os.replace(tmp_name, path)
+    except Exception:
         try:
             os.unlink(tmp_name)
         except OSError:
@@ -142,6 +162,23 @@ async def upload_logo(file: UploadFile = File(...)) -> dict[str, str]:
     url = f"/fixtures/assets/{target.name}"
     logger.info("Saved logo to %s (%d bytes)", target, len(body))
     return {"url": url, "filename": target.name, "bytes": str(len(body))}
+
+
+@router.get("/md", response_class=PlainTextResponse)
+async def get_brand_md() -> str:
+    """Return the persisted Brand.md, or 404 if no scan has run yet.
+
+    The Wiki tab in Brand Memory consumes this directly. The `text/plain`
+    response is intentional: the frontend renders with `react-markdown` so we
+    never want middlewares to gzip/transform the content into HTML.
+    """
+    if not _BRAND_MD.exists():
+        raise HTTPException(status_code=404, detail="Brand.md not yet generated.")
+    try:
+        return _BRAND_MD.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.error("Failed to read %s: %s", _BRAND_MD, exc)
+        raise HTTPException(status_code=500, detail="Brand.md unreadable.") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +449,207 @@ async def _synthesize_voice(prose: str) -> tuple[str, bool]:
     return voice, False
 
 
+_BRAND_LLM_PROMPT: Final[str] = """You are extracting a brand profile from a website's content.
+
+Return STRICT JSON with this exact shape (and NOTHING else — no prose, no fences):
+{{
+  "name": "...",
+  "tagline": "...",
+  "palette": ["#RRGGBB", "#RRGGBB", "#RRGGBB", "#RRGGBB"],
+  "voice": "...",
+  "products": [{{"name":"...","sku":"slug-form"}}],
+  "logoUrl": null,
+  "brandMd": "# ...\\n\\n..."
+}}
+
+Rules:
+- name: 1-3 words, the brand's display name
+- tagline: <=80 chars, brand value prop
+- palette: 4 hex colors that capture the brand's visual identity (avoid pure black/white)
+- voice: ONE paragraph (<60 words) describing register, sentence rhythm, what they emphasize, what they avoid
+- products: up to 5 items distilled from CATALOG_TITLES; sku is a kebab-case slug
+- logoUrl: pick the most-likely logo image URL from IMAGES, or null
+- brandMd: a complete markdown briefing with these sections in order:
+    # {{name}}
+    > {{tagline}}
+    ## Voice
+    {{voice}}
+    ## Palette
+    | Color | Hex |
+    | --- | --- |
+    | (one row per palette entry, color name + hex)
+    ## Products
+    - bullet list of products
+    ## Source
+    {{url}} — scanned automatically.
+
+URL: {url}
+
+HOMEPAGE PROSE (truncated):
+{prose}
+
+CATALOG TITLES:
+{catalog}
+
+IMAGE URLS:
+{images}
+"""
+
+
+def _strip_json_fences(text: str) -> str:
+    """Remove ```json ... ``` or ``` ... ``` wrappers if present."""
+    s = text.strip()
+    if s.startswith("```"):
+        # Drop opening fence (and optional language tag) and trailing fence
+        s = re.sub(r"^```[a-zA-Z0-9]*\s*\n?", "", s)
+        if s.endswith("```"):
+            s = s[: -len("```")]
+    return s.strip()
+
+
+def _coerce_brand_payload(raw: str) -> dict[str, Any] | None:
+    """Best-effort extract a JSON object from an LLM response.
+
+    Handles plain JSON, fenced JSON, or JSON embedded inside prose. Returns
+    None when no balanced object can be found.
+    """
+    if not raw:
+        return None
+    candidates = [raw, _strip_json_fences(raw)]
+    # Pull the first balanced {...} block as a last resort.
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if match:
+        candidates.append(match.group(0))
+    for candidate in candidates:
+        try:
+            obj = json.loads(candidate)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
+def _brand_md_from_profile(profile: dict[str, Any]) -> str:
+    """Heuristic markdown brief from a profile dict (no LLM)."""
+    name = str(profile.get("name") or "Brand").strip() or "Brand"
+    tagline = str(profile.get("tagline") or "").strip()
+    voice = str(profile.get("voice") or "").strip()
+    palette = list(profile.get("palette") or [])
+    products = list(profile.get("products") or [])
+    source_url = str(profile.get("sourceUrl") or "").strip()
+    last_scanned = str(profile.get("lastScannedAt") or "").strip()
+
+    lines: list[str] = [f"# {name}"]
+    if tagline:
+        lines.append("")
+        lines.append(f"> {tagline}")
+    if voice:
+        lines.extend(["", "## Voice", "", voice])
+    if palette:
+        lines.extend(["", "## Palette", "", "| Swatch | Hex |", "| --- | --- |"])
+        for hex_val in palette[:8]:
+            lines.append(f"| ◼ | `{hex_val}` |")
+    if products:
+        lines.extend(["", "## Products", ""])
+        for product in products[:8]:
+            pname = str(product.get("name") or "").strip() if isinstance(product, dict) else str(product)
+            psku = str(product.get("sku") or "").strip() if isinstance(product, dict) else ""
+            if pname:
+                if psku:
+                    lines.append(f"- **{pname}** — `{psku}`")
+                else:
+                    lines.append(f"- {pname}")
+    if source_url or last_scanned:
+        lines.extend(["", "## Source", ""])
+        if source_url:
+            lines.append(f"- URL: <{source_url}>")
+        if last_scanned:
+            lines.append(f"- Scanned: {last_scanned}")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+async def _llm_synthesize_brand(
+    *,
+    url: str,
+    homepage_prose: str,
+    catalog_titles: list[str],
+    images: list[str],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Single structured-output LLM call.
+
+    Returns (parsed_profile_dict_or_None, brand_md_or_None). On any failure —
+    missing prose, agents runtime crash, malformed JSON — returns (None, None)
+    and the caller falls back to the heuristic path.
+
+    Trusts the agents runtime's pioneer→openai→claude_code→hermes fallback
+    chain. Does NOT short-circuit on the first adapter exception.
+    """
+    if not homepage_prose.strip():
+        return None, None
+
+    try:
+        _services_dir = Path(__file__).resolve().parent.parent.parent
+        if str(_services_dir) not in sys.path:
+            sys.path.insert(0, str(_services_dir))
+        from agents import registry as _registry  # noqa: F401  (side-effect: register adapters)
+        from agents import runtime as agents_runtime
+        from agents.contract import (
+            AdapterExecutionContext,
+            AgentSpec,
+            RuntimeState,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Agents runtime import failed for brand synth: %s", exc)
+        return None, None
+
+    adapter_type = os.environ.get("DEFAULT_ADAPTER", "openai")
+    prompt = _BRAND_LLM_PROMPT.format(
+        url=url,
+        prose=homepage_prose[:6000],
+        catalog="\n".join(f"- {t}" for t in catalog_titles[:12]),
+        images="\n".join(f"- {img}" for img in images[:12]),
+    )
+    spec = AgentSpec(
+        id="brand-synth",
+        name="Brand Synthesizer",
+        role="critic",
+        instructions=(
+            "You distill a brand profile from a website's homepage prose. "
+            "You return strict JSON only — no prose, no markdown fences."
+        ),
+        adapter_type=adapter_type,
+    )
+    ctx = AdapterExecutionContext(
+        run_id=f"brand-synth-{int(datetime.now(tz=timezone.utc).timestamp())}",
+        agent=spec,
+        runtime=RuntimeState(),
+        config={"adapter": adapter_type},
+        context={"prose": prompt},
+        on_log=None,
+    )
+
+    try:
+        result = await agents_runtime.execute(ctx)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("brand-synth runtime.execute raised (no adapter usable): %s", exc)
+        return None, None
+
+    if (result.exit_code or 0) != 0:
+        logger.warning("brand-synth runtime non-zero exit: %s", result.error)
+        return None, None
+
+    raw_text = str(result.result_json.get("text", "")).strip()
+    parsed = _coerce_brand_payload(raw_text)
+    if parsed is None:
+        logger.warning("brand-synth LLM returned unparseable JSON (len=%d)", len(raw_text))
+        return None, None
+
+    brand_md = str(parsed.pop("brandMd", "") or "").strip() or None
+    return parsed, brand_md
+
+
 def _synthesize_profile_from_tavily(
     url: str,
     extract: dict[str, Any],
@@ -603,16 +841,67 @@ async def _scan_stream(url: str) -> AsyncIterator[dict[str, Any]]:
         if len(cleaned) > len(longest):
             longest = cleaned
 
-    if used_fallback:
-        # When Tavily is missing, voice is heuristic-only (skip LLM call).
-        voice = ""
-        voice_fallback = True
-    else:
-        voice, voice_fallback = await _synthesize_voice(longest[:6000])
+    # Single LLM synthesis pass — enriches the seed profile with name/tagline/
+    # palette/voice/products AND returns a complete brand.md. Trusts the
+    # agents runtime's adapter fallback chain (pioneer → openai → claude_code →
+    # hermes). Only runs on the Tavily path; the httpx-fallback path stays
+    # heuristic-only so it remains test-safe and offline-safe.
+    enriched: dict[str, Any] | None = None
+    brand_md_llm: str | None = None
+    llm_voice_fallback = used_fallback  # fallback path: voice is heuristic-only
 
-    profile["voice"] = voice
+    if longest and not used_fallback:
+        catalog_titles: list[str] = []
+        if "catalog" in locals() and isinstance(catalog, dict):
+            catalog_titles = [
+                str(item.get("title") or "")
+                for item in (catalog.get("results") or [])
+                if isinstance(item, dict) and item.get("title")
+            ][:12]
+        seed_images: list[str] = []
+        if profile.get("logoUrl"):
+            seed_images.append(str(profile["logoUrl"]))
 
-    # Persist atomically.
+        enriched, brand_md_llm = await _llm_synthesize_brand(
+            url=url,
+            homepage_prose=longest,
+            catalog_titles=catalog_titles,
+            images=seed_images,
+        )
+
+        if enriched:
+            for key in ("name", "tagline", "voice", "logoUrl"):
+                value = enriched.get(key)
+                if value:
+                    profile[key] = value
+            llm_palette = enriched.get("palette")
+            if isinstance(llm_palette, list) and llm_palette:
+                profile["palette"] = [str(c) for c in llm_palette[:6]]
+            llm_products = enriched.get("products")
+            if isinstance(llm_products, list) and llm_products:
+                profile["products"] = [
+                    {"name": str(p.get("name", "")), "sku": str(p.get("sku", ""))}
+                    for p in llm_products
+                    if isinstance(p, dict) and p.get("name")
+                ][:8]
+        else:
+            # Enrichment didn't run — try the dedicated voice helper as a final
+            # rescue. Same Tavily-path constraint applies (skipped on fallback).
+            voice, voice_only_fallback = await _synthesize_voice(longest[:6000])
+            if voice:
+                profile["voice"] = voice
+            llm_voice_fallback = voice_only_fallback
+
+    if not profile.get("voice"):
+        profile["voice"] = ""
+        llm_voice_fallback = True
+
+    voice_fallback = llm_voice_fallback
+
+    # Brand.md: prefer the LLM's markdown, fall back to a heuristic build.
+    brand_md_text = (brand_md_llm or "").strip() or _brand_md_from_profile(profile)
+
+    # Persist both files atomically.
     try:
         _atomic_write_json(_BRAND_FILE, profile)
         logger.info("Wrote scanned brand profile to %s", _BRAND_FILE)
@@ -620,6 +909,13 @@ async def _scan_stream(url: str) -> AsyncIterator[dict[str, Any]]:
         logger.error("Failed to persist scanned brand profile: %s", exc)
         yield {"type": "error", "code": "persist_failed", "url": url}
         return
+
+    try:
+        _atomic_write_text(_BRAND_MD, brand_md_text)
+        logger.info("Wrote brand.md (%d bytes) to %s", len(brand_md_text), _BRAND_MD)
+    except OSError as exc:
+        # brand.md is non-load-bearing for the demo; warn and continue.
+        logger.warning("Failed to persist brand.md: %s", exc)
 
     complete: dict[str, Any] = {
         "type": "phase",

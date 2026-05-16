@@ -31,6 +31,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     logger.info("CIE API starting on port %s", os.environ.get("PORT", "8100"))
+    try:
+        from db import init_db  # type: ignore[import-not-found]
+
+        init_db()
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Could not init chat DB (chat persistence disabled): %s", exc)
     yield
     logger.info("CIE API shutting down")
 
@@ -73,6 +79,7 @@ _ROUTER_MODULES = [
     "brand",
     "onboarding",
     "canvas",
+    "chat",
 ]
 
 for _name in _ROUTER_MODULES:

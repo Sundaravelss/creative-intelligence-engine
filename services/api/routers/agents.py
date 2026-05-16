@@ -35,6 +35,9 @@ class CampaignRequest(BaseModel):
     brand: dict[str, Any] | None = None
     format: str = "reel"
     adapter: str | None = None
+    # Comma-separated adapter names, e.g. "claude_code,hermes_cli,openai".
+    # Overrides ADAPTER_FALLBACK_CHAIN env var for this single request.
+    fallback: str | None = None
 
 
 @router.get("")
@@ -61,6 +64,8 @@ async def campaign(req: CampaignRequest) -> Any:
     adapter_config: dict[str, Any] = {}
     if req.adapter:
         adapter_config["adapter"] = req.adapter
+    if req.fallback:
+        adapter_config["fallback_chain"] = req.fallback
 
     graph = CampaignGraph(
         brief=req.brief,

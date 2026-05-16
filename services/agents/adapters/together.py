@@ -1,7 +1,12 @@
-"""Hermes (Together AI) adapter — OpenAI-compatible streaming chat-completions.
+"""Together (Together AI) adapter — OpenAI-compatible streaming chat-completions.
 
 Same wire shape as the Pioneer adapter, different env vars and default model
 (``HERMES_API_BASE``, ``HERMES_API_KEY``, ``HERMES_MODEL``).
+
+Renamed 2026-05-16 from ``hermes`` → ``together`` because the new
+``hermes_cli`` adapter (which spawns the actual nousresearch/hermes-agent CLI)
+took over the ``hermes`` name in users' minds. ``HermesNotConfigured`` kept
+as a class alias for backwards compatibility.
 """
 
 from __future__ import annotations
@@ -22,8 +27,12 @@ from ..contract import (
 logger = logging.getLogger(__name__)
 
 
-class HermesNotConfigured(RuntimeError):
+class TogetherNotConfigured(RuntimeError):
     """Raised when HERMES_API_KEY is missing so the runtime can fall through."""
+
+
+# Backwards-compatible alias for the old class name. Drop after one release.
+HermesNotConfigured = TogetherNotConfigured
 
 
 async def _emit(ctx: AdapterExecutionContext, stream: str, message: str) -> None:
@@ -51,9 +60,9 @@ async def execute(ctx: AdapterExecutionContext) -> AdapterExecutionResult:
     )
 
     if not api_key:
-        raise HermesNotConfigured("HERMES_API_KEY is not set")
+        raise TogetherNotConfigured("HERMES_API_KEY is not set")
     if not model:
-        raise HermesNotConfigured("HERMES_MODEL is not set")
+        raise TogetherNotConfigured("HERMES_MODEL is not set")
 
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
@@ -69,7 +78,7 @@ async def execute(ctx: AdapterExecutionContext) -> AdapterExecutionResult:
     if "max_tokens" in ctx.config:
         payload["max_tokens"] = int(ctx.config["max_tokens"])
 
-    await _emit(ctx, "stdout", f"[hermes] POST {url} model={model}\n")
+    await _emit(ctx, "stdout", f"[together] POST {url} model={model}\n")
 
     text_parts: list[str] = []
     usage = UsageSummary()
@@ -93,7 +102,7 @@ async def execute(ctx: AdapterExecutionContext) -> AdapterExecutionResult:
                     try:
                         evt = json.loads(data)
                     except json.JSONDecodeError:
-                        logger.debug("hermes: non-JSON SSE chunk: %s", data[:120])
+                        logger.debug("together: non-JSON SSE chunk: %s", data[:120])
                         continue
                     choices = evt.get("choices") or []
                     if choices:
@@ -111,15 +120,15 @@ async def execute(ctx: AdapterExecutionContext) -> AdapterExecutionResult:
     except httpx.HTTPError as exc:
         return AdapterExecutionResult(
             exit_code=1,
-            error=f"hermes transport error: {exc}",
+            error=f"together transport error: {exc}",
             result_json={"text": "".join(text_parts)},
         )
 
     return AdapterExecutionResult(
         exit_code=0,
         usage=usage,
-        result_json={"text": "".join(text_parts), "model": model, "provider": "hermes"},
+        result_json={"text": "".join(text_parts), "model": model, "provider": "together"},
     )
 
 
-__all__ = ["execute", "HermesNotConfigured"]
+__all__ = ["execute", "TogetherNotConfigured", "HermesNotConfigured"]

@@ -13,6 +13,7 @@ interface ChatRailProps {
   adapter: string;
   setAdapter: (id: string) => void;
   onSubmit: (text: string) => void;
+  onSchedule?: (currentText: string) => void;
   onChipFocus?: (chip: GenerationChipData) => void;
   onFollowup?: (item: SuggestedFollowupItem) => void;
   disabled?: boolean;
@@ -26,6 +27,7 @@ export function ChatRail({
   adapter,
   setAdapter,
   onSubmit,
+  onSchedule,
   onChipFocus,
   onFollowup,
   disabled,
@@ -46,6 +48,7 @@ export function ChatRail({
         adapter={adapter}
         setAdapter={setAdapter}
         onSubmit={onSubmit}
+        onSchedule={onSchedule}
         disabled={disabled}
       />
     </aside>

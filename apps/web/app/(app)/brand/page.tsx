@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { ApiError, api } from "@/lib/api";
 
@@ -16,11 +17,29 @@ const EMPTY_PROFILE: ExtendedBrandProfile = {
   products: [],
 };
 
-export default function BrandPage() {
+const VALID_TABS: readonly BrandTabId[] = ["boards", "sources", "wiki", "graph", "units"];
+
+function isValidTab(value: string | null | undefined): value is BrandTabId {
+  return !!value && (VALID_TABS as readonly string[]).includes(value);
+}
+
+function BrandPageInner() {
+  const searchParams = useSearchParams();
+  const queryTab = searchParams.get("tab");
   const [brand, setBrand] = useState<ExtendedBrandProfile>(EMPTY_PROFILE);
   const [loading, setLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<BrandTabId>("sources");
+  const [activeTab, setActiveTab] = useState<BrandTabId>(
+    isValidTab(queryTab) ? queryTab : "sources",
+  );
+
+  // React to deep-links like /brand?tab=wiki even if the URL changes after mount.
+  useEffect(() => {
+    if (isValidTab(queryTab) && queryTab !== activeTab) {
+      setActiveTab(queryTab);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryTab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,16 +48,19 @@ export default function BrandPage() {
         const fetched = await api.get<ExtendedBrandProfile>("/api/brand");
         if (cancelled) return;
         setBrand(fetched);
-        setActiveTab(isBrandEmpty(fetched) ? "sources" : "boards");
+        // Honor the query-param choice; otherwise pick a sensible default.
+        if (!isValidTab(queryTab)) {
+          setActiveTab(isBrandEmpty(fetched) ? "sources" : "boards");
+        }
       } catch (err: unknown) {
         if (cancelled) return;
         if (err instanceof ApiError && err.status === 404) {
           setBrand(EMPTY_PROFILE);
-          setActiveTab("sources");
+          if (!isValidTab(queryTab)) setActiveTab("sources");
         } else {
           const message = err instanceof Error ? err.message : "Failed to load brand";
           setLoadError(message);
-          setActiveTab("sources");
+          if (!isValidTab(queryTab)) setActiveTab("sources");
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -47,6 +69,7 @@ export default function BrandPage() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const subtitle = (() => {
@@ -90,5 +113,18 @@ export default function BrandPage() {
         />
       )}
     </div>
+  );
+}
+
+export default function BrandPage() {
+  // useSearchParams() requires a Suspense boundary in the App Router.
+  return (
+    <Suspense fallback={
+      <div className="flex h-full min-h-screen items-center justify-center">
+        <p className="text-sm text-muted-foreground">Loading brand profile…</p>
+      </div>
+    }>
+      <BrandPageInner />
+    </Suspense>
   );
 }

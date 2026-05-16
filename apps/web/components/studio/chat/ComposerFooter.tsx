@@ -5,7 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   useState,
 } from "react";
-import { ArrowUp, ChevronDown } from "lucide-react";
+import { ArrowUp, CalendarClock, ChevronDown } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,6 +30,8 @@ interface ComposerFooterProps {
   adapter: string;
   setAdapter: (id: string) => void;
   onSubmit: (text: string) => void;
+  /** Open the schedule modal seeded with the current draft. */
+  onSchedule?: (currentText: string) => void;
   disabled?: boolean;
 }
 
@@ -37,6 +39,7 @@ export function ComposerFooter({
   adapter,
   setAdapter,
   onSubmit,
+  onSchedule,
   disabled,
 }: ComposerFooterProps) {
   const [text, setText] = useState("");
@@ -59,6 +62,10 @@ export function ComposerFooter({
   const adapterLabel =
     ADAPTERS.find((a) => a.id === adapter)?.label ?? "Execute";
 
+  const handleSchedule = () => {
+    onSchedule?.(text);
+  };
+
   return (
     <form
       onSubmit={submit}
@@ -75,7 +82,18 @@ export function ComposerFooter({
           disabled={disabled}
         />
         <div className="flex items-center gap-2">
-          <PlusMenu />
+          <PlusMenu onSchedule={handleSchedule} />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={handleSchedule}
+            aria-label="Schedule loop"
+            title="Schedule this prompt as a recurring loop"
+            className="h-8 w-8 rounded-full border border-black/10 bg-white/70 hover:bg-white"
+          >
+            <CalendarClock className="h-4 w-4" />
+          </Button>
           <span className="flex-1" />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

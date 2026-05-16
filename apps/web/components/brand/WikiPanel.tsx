@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Check, FileText, Loader2 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-import { api } from "@/lib/api";
+import { api, API_BASE_URL } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import { LogoUploader } from "./LogoUploader";
@@ -31,12 +33,35 @@ export function WikiPanel({ brand, onChange }: WikiPanelProps) {
   const [local, setLocal] = useState<ExtendedBrandProfile>(brand);
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [brandMd, setBrandMd] = useState<string | null>(null);
+  const [mdLoading, setMdLoading] = useState<boolean>(true);
 
   // Keep local copy in sync when parent receives a freshly-scanned brand.
   useEffect(() => {
     setLocal(brand);
     setStatus("idle");
   }, [brand]);
+
+  // Load fixtures/brand.md whenever the brand changes (e.g. after a fresh scan).
+  useEffect(() => {
+    let cancelled = false;
+    setMdLoading(true);
+    fetch(`${API_BASE_URL}/api/brand/md`)
+      .then(async (res) => (res.ok ? res.text() : null))
+      .then((md) => {
+        if (cancelled) return;
+        setBrandMd(md && md.trim() ? md : null);
+        setMdLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setBrandMd(null);
+        setMdLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brand.lastScannedAt, brand.id]);
 
   const update = (patch: Partial<ExtendedBrandProfile>): void => {
     setLocal((prev) => ({ ...prev, ...patch }));
@@ -133,56 +158,117 @@ export function WikiPanel({ brand, onChange }: WikiPanelProps) {
         </div>
       </section>
 
-      {/* Right column: voice */}
+      {/* Right column: Brand.md viewer + editable voice */}
       <section className="flex flex-col gap-4 rounded-2xl border border-border/40 bg-background/60 p-6">
-        <div>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            Voice
-          </h3>
-          <p className="mt-1 text-xs text-muted-foreground/80">
-            How the brand sounds when it speaks. Used as a system prompt by every downstream generation.
-          </p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="inline-flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              <FileText className="h-3.5 w-3.5" /> Brand.md
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground/80">
+              Synthesized briefing from your last scan. Used as system prompt by every downstream generation.
+            </p>
+          </div>
+          {mdLoading && (
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> Loading
+            </span>
+          )}
         </div>
 
-        <textarea
-          value={local.voice ?? ""}
-          onChange={(e) => update({ voice: e.target.value })}
-          rows={12}
-          placeholder="Calm, plain-spoken, sustainability-forward. Uses first-person plural. Short sentences. Avoids jargon and superlatives."
-          className="flex-1 resize-none rounded-md border border-border/60 bg-background p-4 text-sm leading-relaxed outline-none focus:border-foreground/40"
-        />
+        <article
+          className="flex-1 overflow-y-auto rounded-md border border-border/60 bg-background p-5 text-sm leading-relaxed text-foreground"
+        >
+          {brandMd ? (
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                h1: ({ children }) => (
+                  <h1 className="mt-0 mb-3 text-2xl font-medium tracking-tight text-foreground">{children}</h1>
+                ),
+                h2: ({ children }) => (
+                  <h2 className="mt-5 mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{children}</h2>
+                ),
+                h3: ({ children }) => (
+                  <h3 className="mt-4 mb-1 text-sm font-semibold text-foreground">{children}</h3>
+                ),
+                p: ({ children }) => (
+                  <p className="mb-3 text-foreground">{children}</p>
+                ),
+                blockquote: ({ children }) => (
+                  <blockquote className="my-3 border-l-2 border-foreground/30 pl-3 font-light not-italic text-foreground/80">{children}</blockquote>
+                ),
+                ul: ({ children }) => <ul className="mb-3 list-disc space-y-1 pl-5">{children}</ul>,
+                ol: ({ children }) => <ol className="mb-3 list-decimal space-y-1 pl-5">{children}</ol>,
+                li: ({ children }) => <li className="text-foreground">{children}</li>,
+                code: ({ children }) => (
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[12px] text-foreground/90">{children}</code>
+                ),
+                table: ({ children }) => (
+                  <table className="mb-3 w-full border-collapse text-left text-xs">{children}</table>
+                ),
+                th: ({ children }) => (
+                  <th className="border-b border-border/60 px-2 py-1 text-left font-medium text-muted-foreground">{children}</th>
+                ),
+                td: ({ children }) => (
+                  <td className="border-b border-border/30 px-2 py-1">{children}</td>
+                ),
+                a: ({ href, children }) => (
+                  <a href={href} target="_blank" rel="noreferrer" className="text-foreground underline underline-offset-2 hover:text-foreground/80">{children}</a>
+                ),
+              }}
+            >
+              {brandMd}
+            </ReactMarkdown>
+          ) : !mdLoading ? (
+            <p className="text-sm text-muted-foreground">
+              No Brand.md yet — run a scan from the <strong>Sources</strong> tab to generate one.
+            </p>
+          ) : null}
+        </article>
 
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-xs text-muted-foreground">
+        <details className="rounded-md border border-border/40 bg-background/40 px-3 py-2 text-xs">
+          <summary className="cursor-pointer text-muted-foreground">
+            Edit voice (overrides synthesized markdown)
+          </summary>
+          <textarea
+            value={local.voice ?? ""}
+            onChange={(e) => update({ voice: e.target.value })}
+            rows={4}
+            placeholder="Calm, plain-spoken, sustainability-forward. Uses first-person plural. Short sentences. Avoids jargon and superlatives."
+            className="mt-2 w-full resize-none rounded-md border border-border/60 bg-background p-3 text-sm leading-relaxed outline-none focus:border-foreground/40"
+          />
+          <div className="mt-1 text-[10px] text-muted-foreground">
             {(local.voice ?? "").trim().split(/\s+/).filter(Boolean).length} words
           </div>
-          <div className="flex items-center gap-3">
-            {status === "saved" && (
-              <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
-                <Check className="h-3 w-3" /> Saved
-              </span>
+        </details>
+
+        <div className="flex items-center justify-end gap-3">
+          {status === "saved" && (
+            <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
+              <Check className="h-3 w-3" /> Saved
+            </span>
+          )}
+          {status === "error" && error && (
+            <span className="text-xs text-destructive">{error}</span>
+          )}
+          <button
+            type="button"
+            onClick={() => void onSave()}
+            disabled={status === "saving"}
+            className={cn(
+              "inline-flex items-center gap-2 rounded-full bg-foreground px-5 py-2 text-sm font-medium text-background",
+              "hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-50",
             )}
-            {status === "error" && error && (
-              <span className="text-xs text-destructive">{error}</span>
+          >
+            {status === "saving" ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving
+              </>
+            ) : (
+              "Save brand"
             )}
-            <button
-              type="button"
-              onClick={() => void onSave()}
-              disabled={status === "saving"}
-              className={cn(
-                "inline-flex items-center gap-2 rounded-full bg-foreground px-5 py-2 text-sm font-medium text-background",
-                "hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-50",
-              )}
-            >
-              {status === "saving" ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving
-                </>
-              ) : (
-                "Save brand"
-              )}
-            </button>
-          </div>
+          </button>
         </div>
       </section>
     </div>
