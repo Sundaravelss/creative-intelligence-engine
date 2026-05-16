@@ -1,24 +1,22 @@
 {
-  "id": "acme-sneakers",
-  "name": "Acme Sneakers",
-  "logoUrl": "/fixtures/assets/brand-logo.png",
+  "id": "allbirds",
+  "name": "Allbirds",
+  "logoUrl": "https://www.allbirds.com/cdn/shop/files/allbirds_logo_navy.svg",
+  "tagline": "Comfortable, Sustainable Shoes & Apparel",
   "palette": [
-    "#0F172A",
-    "#F97316",
-    "#FBBF24",
-    "#FFFFFF"
+    "#212121",
+    "#A8A2A7",
+    "#216A51",
+    "#F0C511"
   ],
-  "voice": "Bold, irreverent, Gen-Z. Short sentences. Lots of attitude.",
+  "voice": "Calm, plain-spoken, sustainability-forward. Uses first-person plural ('we', 'our') and treats material origin (eucalyptus tree fiber, merino wool, sugarcane) as the headline product feature. Sentences are short and declarative. Avoids fashion-industry jargon and superlatives. Tone is closer to a Patagonia field guide than a sneaker drop — earnest, factual, quietly confident.",
   "products": [
-    {
-      "id": "p-001",
-      "name": "Storm Runner",
-      "sku": "SR-2026"
-    },
-    {
-      "id": "p-002",
-      "name": "Cloud Walker",
-      "sku": "CW-2026"
-    }
-  ]
+    {"id": "wool-runner", "name": "Wool Runner", "sku": "wool-runner"},
+    {"id": "tree-runner", "name": "Tree Runner", "sku": "tree-runner"},
+    {"id": "tree-dasher", "name": "Tree Dasher", "sku": "tree-dasher"},
+    {"id": "mens-cruiser", "name": "Mens Cruiser", "sku": "mens-cruiser"},
+    {"id": "allbirds-slipper", "name": "Allbirds Slipper", "sku": "allbirds-slipper"}
+  ],
+  "sourceUrl": "https://www.allbirds.com",
+  "lastScannedAt": "2026-05-16T12:49:00Z"
 }

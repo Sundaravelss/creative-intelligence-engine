@@ -47,3 +47,26 @@ test.describe("Agents surface (flow B scaffolding)", () => {
     await expect(cards).toHaveCount(6);
   });
 });
+
+test.describe("Brand Memory surface (WS-V2)", () => {
+  test("renders 5 tabs and Sources URL input", async ({ page }) => {
+    await page.goto("/brand");
+
+    // 5 tab triggers visible.
+    await expect(page.getByTestId("brand-tab-boards")).toBeVisible();
+    await expect(page.getByTestId("brand-tab-sources")).toBeVisible();
+    await expect(page.getByTestId("brand-tab-wiki")).toBeVisible();
+    await expect(page.getByTestId("brand-tab-graph")).toBeVisible();
+    await expect(page.getByTestId("brand-tab-units")).toBeVisible();
+
+    // Click Sources, expect URL input.
+    await page.getByTestId("brand-tab-sources").click();
+    await expect(page.getByLabel("Brand website URL")).toBeVisible();
+
+    // Click Wiki, expect voice textarea (matched by placeholder text).
+    await page.getByTestId("brand-tab-wiki").click();
+    await expect(
+      page.getByPlaceholder(/Calm, plain-spoken, sustainability-forward/i),
+    ).toBeVisible();
+  });
+});

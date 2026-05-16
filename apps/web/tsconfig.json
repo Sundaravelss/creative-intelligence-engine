@@ -10,6 +10,7 @@
     "jsx": "preserve",
     "incremental": true,
     "plugins": [{ "name": "next" }],
+    "baseUrl": ".",
     "paths": {
       "@/*": ["./*"],
       "@cie/ui-artifacts": ["../../packages/ui-artifacts"],
