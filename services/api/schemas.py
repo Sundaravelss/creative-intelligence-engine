@@ -34,6 +34,10 @@ class Artifact(BaseModel):
     updated_at: str = Field(..., alias="updatedAt")
     meta: dict[str, Any] | None = None
     cost_usd: float | None = Field(None, alias="costUsd")
+    # Variant-grouping fields (added WS-V1). Optional + nullable so older
+    # callers stay compatible.
+    variant_of: str | None = Field(None, alias="variantOf")
+    variant_label: str | None = Field(None, alias="variantLabel")
 
     model_config = {"populate_by_name": True}
 

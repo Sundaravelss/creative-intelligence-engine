@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 
-export default function ProfilePage(): JSX.Element {
+export default function ProfilePage() {
   const [name, setName] = useState<string>("Sundara");
   const [email, setEmail] = useState<string>("sundaravelselvarajfr@gmail.com");
   const [saving, setSaving] = useState(false);

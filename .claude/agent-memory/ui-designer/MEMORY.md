@@ -1,0 +1,2 @@
+- [CIE Suspense + useSearchParams](project_cie_studio_suspense.md) — `/studio` requires Suspense boundary because of `useSearchParams()`; otherwise prerender fails.
+- [CIE artifact meta channel](project_cie_artifact_meta.md) — `@cie/ui-artifacts` Artifact union has no `meta` field; v1 carries variantOf/variantLabel/viralScore via a structural cast onto `meta`.

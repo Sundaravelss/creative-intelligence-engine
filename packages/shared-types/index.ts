@@ -17,6 +17,12 @@ export interface Artifact {
   updatedAt: string;
   meta?: Record<string, unknown>;
   costUsd?: number;
+  /** Shot id this artifact is a variant of. Artifacts sharing the same
+   *  `variantOf` are grouped into a VariantStack on the canvas.
+   *  Pre-WS-V1 callers may omit this. */
+  variantOf?: string;
+  /** Human-readable variant label (e.g. "editorial", "golden-hour"). */
+  variantLabel?: string;
 }
 
 export type ConnectorStatus = "connected" | "not-connected" | "coming-soon";

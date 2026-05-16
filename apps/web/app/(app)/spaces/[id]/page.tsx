@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { SpaceSteps } from "@/components/spaces/SpaceSteps";
-import { SPACE_TEMPLATES, getSpaceById } from "@/components/spaces/SpaceGrid";
+import { SPACE_TEMPLATES, getSpaceById } from "@/components/spaces/templates";
 
 interface SpaceDetailPageProps {
   params: { id: string };
@@ -23,7 +23,7 @@ export function generateMetadata({
 
 export default function SpaceDetailPage({
   params,
-}: SpaceDetailPageProps): JSX.Element {
+}: SpaceDetailPageProps) {
   const space = getSpaceById(params.id);
   if (!space) notFound();
 
@@ -47,7 +47,14 @@ export default function SpaceDetailPage({
         </p>
       </header>
 
-      <SpaceSteps space={space} />
+      <SpaceSteps
+        space={{
+          id: space.id,
+          name: space.name,
+          description: space.description,
+          defaultPrompt: space.defaultPrompt,
+        }}
+      />
     </div>
   );
 }

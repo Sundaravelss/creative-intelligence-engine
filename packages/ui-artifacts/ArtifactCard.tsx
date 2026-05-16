@@ -1,5 +1,15 @@
 import type { ReactNode } from "react";
-import { Maximize2, FileText, Image as ImageIcon, Video, Layers, Table, Code, Globe } from "lucide-react";
+import {
+  ChevronDown,
+  Code,
+  FileText,
+  Globe,
+  Image as ImageIcon,
+  Layers,
+  Maximize2,
+  Table,
+  Video,
+} from "lucide-react";
 import { cn } from "./shared/cn";
 import type { Artifact, ArtifactType } from "./types";
 
@@ -40,6 +50,12 @@ function TypeIcon({ type, className }: { type: ArtifactType; className?: string 
   }
 }
 
+/**
+ * Frosted artifact card — restyled for the hyperagent liquid-canvas look.
+ * The "label pill" floats ABOVE the card (top-left, translate-y -50%) and
+ * the chrome is hover-only on the top-right. Logic and props are unchanged
+ * from v1 — this is class-only.
+ */
 export function ArtifactCard({
   artifact,
   children,
@@ -50,32 +66,44 @@ export function ArtifactCard({
   return (
     <article
       className={cn(
-        "hc-card flex flex-col h-full overflow-hidden hc-snap-center",
-        isActive ? "ring-1 ring-[color:var(--hc-accent-coral-soft)]" : "",
+        "group relative flex h-full flex-col overflow-visible rounded-2xl",
+        "border border-white/30 bg-white/60 shadow-2xl backdrop-blur-sm",
+        "transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_30px_60px_-15px_rgba(0,0,0,0.35)]",
+        isActive
+          ? "ring-2 ring-[oklch(0.66_0.18_25)] ring-offset-2 ring-offset-transparent"
+          : "",
         className,
       )}
       aria-current={isActive}
     >
-      <header className="flex items-center justify-between gap-2 px-4 py-2 border-b border-[color:var(--color-border,oklch(0.92_0_0))]">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="hc-pill px-2 py-0.5 text-[10px] uppercase tracking-wider bg-[color:var(--hc-accent-coral-soft)] text-[color:var(--hc-accent-coral)] flex items-center gap-1">
-            <TypeIcon type={artifact.type} className="h-3 w-3" />
-            {TYPE_LABEL[artifact.type]}
-          </span>
-          <h3 className="text-sm font-medium truncate">{artifact.name}</h3>
-        </div>
-        {onExpand && (
+      {/* floating label pill, above the card border */}
+      <span className="absolute -top-3 left-3 z-20 inline-flex max-w-[80%] items-center gap-1.5 rounded-full bg-black/65 px-3 py-1.5 text-[11px] font-medium text-white backdrop-blur-md">
+        <TypeIcon type={artifact.type} className="h-3 w-3" />
+        <span className="truncate">
+          <span className="opacity-70">{TYPE_LABEL[artifact.type]}</span>
+          <span className="mx-1.5 opacity-40">·</span>
+          {artifact.name}
+        </span>
+        <ChevronDown className="h-3 w-3 shrink-0 opacity-80" />
+      </span>
+
+      {/* hover-only top-right action overlay */}
+      {onExpand ? (
+        <div className="absolute right-2 top-2 z-20 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
           <button
             type="button"
             onClick={onExpand}
-            className="hc-pill p-1.5 hover:bg-[oklch(0.96_0_0)] transition-colors"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white hover:bg-black/70"
             aria-label="Expand artifact"
           >
             <Maximize2 className="h-3.5 w-3.5" />
           </button>
-        )}
-      </header>
-      <div className="flex-1 min-h-0 overflow-auto p-6">{children}</div>
+        </div>
+      ) : null}
+
+      <div className="relative flex-1 min-h-0 overflow-hidden rounded-2xl">
+        {children}
+      </div>
     </article>
   );
 }

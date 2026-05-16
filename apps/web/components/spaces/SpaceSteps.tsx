@@ -15,7 +15,17 @@ import { toast } from "sonner";
 
 import { FormatPicker, type StudioFormat } from "@/components/studio/FormatPicker";
 
-import type { SpaceTemplate } from "./SpaceGrid";
+/**
+ * Serializable subset of `SpaceTemplate` — the parent server component
+ * cannot pass the full template (it contains a `LucideIcon` function ref
+ * for `icon`, which won't cross the server→client boundary).
+ */
+export interface SpaceStepsInput {
+  id: string;
+  name: string;
+  description: string;
+  defaultPrompt: string;
+}
 
 type StepId = 1 | 2;
 
@@ -29,7 +39,7 @@ interface UploadedFile {
 }
 
 interface SpaceStepsProps {
-  space: SpaceTemplate;
+  space: SpaceStepsInput;
 }
 
 function detectKind(file: File): UploadedFile["kind"] {
@@ -64,7 +74,7 @@ function useStepFromHash(): [StepId, (step: StepId) => void] {
   return [step, go];
 }
 
-export function SpaceSteps({ space }: SpaceStepsProps): JSX.Element {
+export function SpaceSteps({ space }: SpaceStepsProps) {
   const router = useRouter();
   const [step, goStep] = useStepFromHash();
 
@@ -393,7 +403,7 @@ interface StepDotProps {
   label: string;
 }
 
-function StepDot({ active, done, label }: StepDotProps): JSX.Element {
+function StepDot({ active, done, label }: StepDotProps) {
   return (
     <span
       aria-hidden

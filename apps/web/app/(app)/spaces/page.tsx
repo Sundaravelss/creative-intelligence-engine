@@ -4,7 +4,7 @@ export const metadata = {
   title: "Spaces — Creative Intelligence Engine",
 };
 
-export default function SpacesPage(): JSX.Element {
+export default function SpacesPage() {
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-8">
       <header className="flex flex-col gap-2">

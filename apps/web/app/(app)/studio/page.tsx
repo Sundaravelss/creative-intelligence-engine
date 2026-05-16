@@ -1,370 +1,486 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, AlertCircle, CheckCircle2, Circle } from "lucide-react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Film, Globe, LayoutTemplate, Sparkles } from "lucide-react";
 import { toast } from "sonner";
+import type { Artifact as UiArtifact } from "@cie/ui-artifacts";
 
-import { PromptInput } from "../../../components/studio/PromptInput";
-import {
-  FormatPicker,
-  type StudioFormat,
-} from "../../../components/studio/FormatPicker";
-import { TemplateGrid } from "../../../components/studio/TemplateGrid";
-import { RunButton } from "../../../components/studio/RunButton";
-import {
-  LiveCanvasView,
-  type LiveNodeEvent,
-} from "../../../components/studio/LiveCanvasView";
-
-interface BrandSummary {
-  id: string;
-  name: string;
-}
-
-interface BrandResponse {
-  id?: string;
-  name?: string;
-  brands?: BrandSummary[];
-}
-
-interface SsePayload {
-  nodeId?: string;
-  artifact?: { url: string; kind: "image" | "video" };
-  message?: string;
-}
+import { ChatRail } from "@/components/studio/chat/ChatRail";
+import type {
+  ChatMessage,
+  GenerationChipData,
+  SuggestedFollowupItem,
+} from "@/components/studio/chat/types";
+import { LiquidCanvas } from "@/components/studio/canvas/LiquidCanvas";
+import type { CanvasViewMode } from "@/components/studio/canvas/ViewModeToggle";
+import { EmptyStateHero } from "@/components/studio/EmptyStateHero";
+import type { StudioFormat } from "@/components/studio/FormatPicker";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
-const DEFAULT_BRANDS: BrandSummary[] = [
-  { id: "acme-sneakers", name: "Acme Sneakers" },
-  { id: "storm-runner", name: "Storm Runner" },
+const PROJECT_NAME = "Marketing Image Generation for Bags";
+const DEFAULT_BRAND = "Allbirds";
+
+const DEFAULT_FOLLOWUPS: SuggestedFollowupItem[] = [
+  {
+    icon: Sparkles,
+    label: "Generate more variations",
+    query: "Generate three more variations of the same shot.",
+  },
+  {
+    icon: Globe,
+    label: "Build a campaign landing page",
+    query: "Build a campaign landing page based on these images.",
+  },
+  {
+    icon: Film,
+    label: "Animate one into a video",
+    query: "Animate the selected variant into a 6-second video.",
+  },
+  {
+    icon: LayoutTemplate,
+    label: "Social media crops",
+    query: "Create social media crops (1:1, 9:16, 4:5) of the chosen variant.",
+  },
 ];
 
-interface TimelineEntry {
-  nodeId: string;
-  phase: "start" | "complete";
-  ts: number;
+const REASONING_BY_NODE: Record<string, string> = {
+  strategist:
+    "Reading the brief — bags, marketing imagery. Mapping audience: design-led shoppers, urban, late-20s. Pulling 3 hook angles: heritage craft, daily-carry utility, statement silhouette.",
+  creative_director:
+    "Picking format mix (9:16 hero + 1:1 supporting). Reserving budget for 3 variants per shot: editorial, golden-hour, overcast. Variants will be scored side by side.",
+  art_director:
+    "Composing shot list. Flagging references: Helmut Newton's hard light, Margiela atelier flatlays, Saul Leiter colour blocking. Routing to Nano Banana 2 (Flash Im) for variants.",
+  analyst:
+    "Scoring each variant on hook density, contrast, motion, novelty. Picking the leader.",
+  publisher:
+    "Standing by to publish the chosen variant to Meta + Instagram.",
+};
+
+interface SsePayload {
+  nodeId?: string;
+  artifact?: {
+    id?: string;
+    url?: string;
+    kind?: "image" | "video" | "document" | "code";
+    name?: string;
+    shotId?: string;
+    variantId?: string;
+    variantLabel?: string;
+    meta?: Record<string, unknown>;
+  };
+  message?: string;
+  scores?: Array<{
+    artifactId: string;
+    viralScore: number;
+  }>;
+}
+
+function uid(prefix: string): string {
+  return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function nowTs(): string {
+  return new Date().toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export default function StudioPage() {
-  const [prompt, setPrompt] = useState<string>(
-    "Launch winter sneakers, Gen-Z, Paris",
-  );
-  const [format, setFormat] = useState<StudioFormat>("reel");
-  const [brandId, setBrandId] = useState<string>(DEFAULT_BRANDS[0].id);
-  const [brands, setBrands] = useState<BrandSummary[]>(DEFAULT_BRANDS);
-  const [running, setRunning] = useState<boolean>(false);
-  const [events, setEvents] = useState<LiveNodeEvent[]>([]);
-  const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-
-  // Best-effort brand load. Keeps a working default if /api/brand is missing.
-  useEffect(() => {
-    let cancelled = false;
-    async function loadBrands() {
-      try {
-        const res = await fetch(`${API_BASE}/api/brand`, { cache: "no-store" });
-        if (!res.ok) return;
-        const data: BrandResponse = await res.json();
-        if (cancelled) return;
-        if (Array.isArray(data.brands) && data.brands.length > 0) {
-          setBrands(data.brands);
-          setBrandId(data.brands[0].id);
-        } else if (data.id && data.name) {
-          setBrands([{ id: data.id, name: data.name }]);
-          setBrandId(data.id);
-        }
-      } catch {
-        // Backend offline or stub — keep DEFAULT_BRANDS.
-      }
-    }
-    loadBrands();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handlePickTemplate = useCallback((scaffold: string) => {
-    setPrompt(scaffold);
-  }, []);
-
-  const subjectFromPrompt = useMemo(() => prompt.split(/[,.\n]/)[0] ?? "", [prompt]);
-
-  const stop = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setRunning(false);
-  }, []);
-
-  const handleRun = useCallback(async () => {
-    if (!prompt.trim()) {
-      toast.error("Add a brief before running.");
-      return;
-    }
-    setError(null);
-    setEvents([]);
-    setTimeline([]);
-    setRunning(true);
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    try {
-      const res = await fetch(`${API_BASE}/api/agents/campaign`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          brief: { keyword: prompt },
-          brand_id: brandId,
-          format,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!res.ok || !res.body) {
-        throw new Error(`Campaign request failed: ${res.status}`);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        // Parse SSE blocks separated by blank line.
-        let idx = buffer.indexOf("\n\n");
-        while (idx !== -1) {
-          const block = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 2);
-          parseSseBlock(block, {
-            onStart: (nodeId) => {
-              setEvents((curr) => [...curr, { nodeId, phase: "start" }]);
-              setTimeline((curr) => [
-                ...curr,
-                { nodeId, phase: "start", ts: Date.now() },
-              ]);
-            },
-            onComplete: (nodeId) => {
-              setEvents((curr) => [...curr, { nodeId, phase: "complete" }]);
-              setTimeline((curr) => [
-                ...curr,
-                { nodeId, phase: "complete", ts: Date.now() },
-              ]);
-            },
-            onArtifact: (nodeId, artifact) => {
-              setEvents((curr) => [
-                ...curr,
-                { nodeId, phase: "complete", artifact },
-              ]);
-            },
-            onDone: () => {
-              toast.success("Campaign ready");
-            },
-            onError: (msg) => {
-              setError(msg);
-              toast.error(msg);
-            },
-          });
-          idx = buffer.indexOf("\n\n");
-        }
-      }
-    } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        // user cancelled
-      } else {
-        const msg =
-          err instanceof Error ? err.message : "Failed to run campaign";
-        setError(msg);
-        toast.error(msg);
-      }
-    } finally {
-      setRunning(false);
-      abortRef.current = null;
-    }
-  }, [prompt, brandId, format]);
-
-  const handlePublish = useCallback(() => {
-    toast.success("Published to Meta Ads (mock).");
-  }, []);
-
   return (
-    <main className="relative min-h-screen overflow-hidden">
-      <BackgroundMesh />
-      <div className="relative mx-auto flex max-w-6xl flex-col gap-6 p-6 sm:p-10">
-        <header className="flex items-end justify-between gap-4">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-              Marketing Studio
-            </p>
-            <h1 className="hc-serif-headline mt-1 text-4xl font-semibold tracking-tight">
-              Brief in. Campaign out.
-            </h1>
-          </div>
-          <BrandSelector
-            value={brandId}
-            options={brands}
-            onChange={setBrandId}
-            disabled={running}
-          />
-        </header>
-
-        <section className="flex flex-col gap-3">
-          <PromptInput
-            value={prompt}
-            onChange={setPrompt}
-            onSubmit={handleRun}
-            disabled={running}
-          />
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <FormatPicker value={format} onChange={setFormat} />
-            <div className="flex items-center gap-2">
-              {running ? (
-                <button
-                  type="button"
-                  onClick={stop}
-                  className="hc-pill hc-glass border border-[color:var(--color-border)] px-4 py-2 text-sm"
-                >
-                  Stop
-                </button>
-              ) : null}
-              <RunButton onClick={handleRun} loading={running} />
-            </div>
-          </div>
-        </section>
-
-        <section>
-          <h2 className="mb-3 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-            Templates
-          </h2>
-          <TemplateGrid subject={subjectFromPrompt} onPick={handlePickTemplate} />
-        </section>
-
-        <section className="flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-              Live canvas
-            </h2>
-            <button
-              type="button"
-              onClick={handlePublish}
-              disabled={!events.some((e) => e.artifact)}
-              className="hc-pill hc-glass inline-flex items-center gap-1 border border-[color:var(--color-border)] px-3 py-1.5 text-xs font-medium transition-colors hover:border-[color:var(--hc-accent-coral)] disabled:opacity-50"
-            >
-              Publish <ChevronRight size={12} />
-            </button>
-          </div>
-          <LiveCanvasView events={events} active={running} />
-          <Timeline entries={timeline} />
-          {error ? (
-            <div className="hc-glass inline-flex items-center gap-2 rounded-md border border-[color:var(--color-border)] px-3 py-2 text-sm text-[color:var(--color-destructive)]">
-              <AlertCircle size={14} />
-              {error}
-            </div>
-          ) : null}
-        </section>
-      </div>
-    </main>
-  );
-}
-
-interface BrandSelectorProps {
-  value: string;
-  options: BrandSummary[];
-  onChange: (id: string) => void;
-  disabled?: boolean;
-}
-
-function BrandSelector({ value, options, onChange, disabled }: BrandSelectorProps) {
-  return (
-    <label className="hc-pill hc-glass inline-flex items-center gap-2 border border-[color:var(--color-border)] px-3 py-1.5 text-sm">
-      <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-        Brand
-      </span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-        className="bg-transparent text-sm font-medium outline-none"
-      >
-        {options.map((b) => (
-          <option key={b.id} value={b.id}>
-            {b.name}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-interface TimelineProps {
-  entries: TimelineEntry[];
-}
-
-function Timeline({ entries }: TimelineProps) {
-  if (entries.length === 0) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        Run a brief to populate the timeline.
-      </p>
-    );
-  }
-  return (
-    <ol
-      className="flex flex-wrap items-center gap-2"
-      data-testid="cie-timeline"
+    <Suspense
+      fallback={
+        <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+          Loading studio…
+        </div>
+      }
     >
-      {entries.map((e, i) => (
-        <li
-          key={`${e.nodeId}-${e.phase}-${i}`}
-          className={[
-            "hc-pill inline-flex items-center gap-1.5 border px-2.5 py-1 text-[11px] font-medium",
-            e.phase === "complete"
-              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-              : "border-[color:var(--hc-accent-coral)] bg-[color:var(--hc-accent-coral-soft)] text-[color:var(--hc-accent-coral)]",
-          ].join(" ")}
-        >
-          {e.phase === "complete" ? (
-            <CheckCircle2 size={11} />
-          ) : (
-            <Circle size={11} />
-          )}
-          <span className="font-mono uppercase tracking-wider">{e.nodeId}</span>
-        </li>
-      ))}
-    </ol>
+      <StudioPageInner />
+    </Suspense>
   );
 }
 
-function BackgroundMesh() {
+function StudioPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const adapterParam = searchParams?.get("adapter") ?? "openai";
+  const viewParam = (searchParams?.get("view") as CanvasViewMode) ?? "carousel";
+
+  const [adapter, setAdapter] = useState<string>(adapterParam);
+  const [viewMode, setViewModeState] = useState<CanvasViewMode>(viewParam);
+  const [thread, setThread] = useState<ChatMessage[]>([]);
+  const [artifacts, setArtifacts] = useState<UiArtifact[]>([]);
+  const [selectedVariantByShot, setSelectedVariantByShot] = useState<
+    Record<string, string>
+  >({});
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [format, setFormat] = useState<StudioFormat>("reel");
+  const abortRef = useRef<AbortController | null>(null);
+  const chipTimers = useRef<Map<string, number>>(new Map());
+
+  // Tick generation chips so the elapsed counter advances visibly.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setThread((curr) =>
+        curr.map((msg) => {
+          if (msg.kind !== "generation") return msg;
+          const next = msg.chips.map((c) =>
+            c.status === "running"
+              ? { ...c, elapsedSec: c.elapsedSec + 1 }
+              : c,
+          );
+          return { ...msg, chips: next };
+        }),
+      );
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Sync view to URL.
+  const setViewMode = useCallback(
+    (m: CanvasViewMode) => {
+      setViewModeState(m);
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
+      params.set("view", m);
+      router.replace(`/studio?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
+
+  const setAdapterAndUrl = useCallback(
+    (a: string) => {
+      setAdapter(a);
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
+      params.set("adapter", a);
+      router.replace(`/studio?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
+
+  const updateGenerationChip = useCallback(
+    (chipId: string, patch: Partial<GenerationChipData>) => {
+      setThread((curr) =>
+        curr.map((msg) => {
+          if (msg.kind !== "generation") return msg;
+          const found = msg.chips.find((c) => c.id === chipId);
+          if (!found) return msg;
+          return {
+            ...msg,
+            chips: msg.chips.map((c) =>
+              c.id === chipId ? { ...c, ...patch } : c,
+            ),
+          };
+        }),
+      );
+    },
+    [],
+  );
+
+  const appendChipToActiveGen = useCallback(
+    (chip: GenerationChipData) => {
+      setThread((curr) => {
+        // Find the LAST generation block.
+        const lastIdx = [...curr]
+          .reverse()
+          .findIndex((m) => m.kind === "generation");
+        if (lastIdx === -1) {
+          return [
+            ...curr,
+            { kind: "generation", id: uid("gen"), chips: [chip] },
+          ];
+        }
+        const realIdx = curr.length - 1 - lastIdx;
+        const target = curr[realIdx];
+        if (target.kind !== "generation") return curr;
+        const next = [...curr];
+        next[realIdx] = { ...target, chips: [...target.chips, chip] };
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleSubmit = useCallback(
+    async (text: string) => {
+      if (running) {
+        toast.error("A run is already streaming. Wait for it to finish.");
+        return;
+      }
+      // Abort any prior controller; reset run state for this turn.
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      chipTimers.current.clear();
+
+      const userMsg: ChatMessage = {
+        kind: "user",
+        id: uid("u"),
+        text,
+        timestamp: nowTs(),
+      };
+
+      setThread((curr) => [...curr, userMsg]);
+      setRunning(true);
+
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/agents/campaign?adapter=${encodeURIComponent(adapter)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              brief: { keyword: text },
+              brand_id: "allbirds",
+              format,
+              variants_per_shot: 3,
+            }),
+            signal: controller.signal,
+          },
+        );
+
+        if (!res.ok || !res.body) {
+          throw new Error(`Campaign request failed: ${res.status}`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let genBlockOpened = false;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let idx = buffer.indexOf("\n\n");
+          while (idx !== -1) {
+            const block = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+            const parsed = parseSseBlock(block);
+            if (!parsed) {
+              idx = buffer.indexOf("\n\n");
+              continue;
+            }
+            const { event, data } = parsed;
+
+            if (event === "node_start" && data.nodeId) {
+              const nodeId = data.nodeId;
+              const reasoning = REASONING_BY_NODE[nodeId];
+              if (reasoning) {
+                setThread((curr) => [
+                  ...curr,
+                  {
+                    kind: "reasoning",
+                    id: uid("r"),
+                    text: reasoning,
+                    title: titleForNode(nodeId),
+                  },
+                ]);
+              }
+              if (nodeId === "art_director" && !genBlockOpened) {
+                setThread((curr) => [
+                  ...curr,
+                  { kind: "generation", id: uid("gen"), chips: [] },
+                ]);
+                genBlockOpened = true;
+              }
+            } else if (event === "artifact" && data.artifact) {
+              const a = data.artifact;
+              const id = a.id ?? uid("a");
+              const variantLabel = a.variantLabel ?? "Variant";
+              const shotId = a.shotId ?? id;
+              const url = a.url ?? "";
+              const kind = a.kind ?? "image";
+              if (kind === "image" || kind === "video") {
+                const artifact: UiArtifact = (kind === "image"
+                  ? {
+                      id,
+                      type: "image",
+                      url,
+                      name: a.name ?? variantLabel,
+                      source: variantLabel,
+                    }
+                  : {
+                      id,
+                      type: "video",
+                      url,
+                      name: a.name ?? variantLabel,
+                      source: variantLabel,
+                    }) as UiArtifact;
+                // Stash variantOf + meta on the artifact for grouping/scoring.
+                (artifact as unknown as { meta: Record<string, unknown> }).meta = {
+                  variantOf: shotId,
+                  variantLabel,
+                  ...(a.meta ?? {}),
+                };
+                setArtifacts((curr) => [...curr, artifact]);
+                if (focusId === null) setFocusId(id);
+
+                const chip: GenerationChipData = {
+                  id: uid("chip"),
+                  label: "Generated image",
+                  promptSummary: `${variantLabel} — ${a.name ?? "shot"}`,
+                  modelName: "Nano Banana 2 (Flash Im)",
+                  status: "complete",
+                  elapsedSec: 7,
+                  etaSec: 7,
+                  shotId,
+                  variantId: id,
+                  artifactId: id,
+                };
+                appendChipToActiveGen(chip);
+              }
+            } else if (event === "node_complete" && data.scores) {
+              // Score patch into existing artifacts.
+              setArtifacts((curr) =>
+                curr.map((art) => {
+                  const match = data.scores?.find(
+                    (s) => s.artifactId === art.id,
+                  );
+                  if (!match) return art;
+                  const existing = art as unknown as {
+                    meta?: Record<string, unknown>;
+                  };
+                  const nextMeta = {
+                    ...(existing.meta ?? {}),
+                    viralScore: match.viralScore,
+                  };
+                  return {
+                    ...(art as unknown as Record<string, unknown>),
+                    meta: nextMeta,
+                  } as unknown as UiArtifact;
+                }),
+              );
+            } else if (event === "done") {
+              setThread((curr) => [
+                ...curr,
+                {
+                  kind: "assistant",
+                  id: uid("a"),
+                  text:
+                    "Three variants are on the canvas — editorial, golden-hour, and overcast. Want me to push any of these further: swap colors, generate matching social crops, or animate the selected shot into a 6-second cut?",
+                },
+                { kind: "followups", id: uid("f"), items: DEFAULT_FOLLOWUPS },
+              ]);
+            } else if (event === "error") {
+              toast.error(data.message ?? "Stream error");
+            }
+            idx = buffer.indexOf("\n\n");
+          }
+        }
+      } catch (err: unknown) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          // user navigated away
+        } else {
+          const msg = err instanceof Error ? err.message : "Run failed";
+          toast.error(msg);
+          // Demo-friendly fallback: stub out a synthetic answer so the screen
+          // still tells a story when the FastAPI backend isn't up.
+          fallbackSyntheticRun({
+            text,
+            setThread,
+            setArtifacts,
+            setFocusId,
+            appendChipToActiveGen,
+          });
+        }
+      } finally {
+        setRunning(false);
+        abortRef.current = null;
+        // Mark any still-running chips as complete so the UI doesn't hang.
+        setThread((curr) =>
+          curr.map((msg) =>
+            msg.kind === "generation"
+              ? {
+                  ...msg,
+                  chips: msg.chips.map((c) =>
+                    c.status === "running" ? { ...c, status: "complete" } : c,
+                  ),
+                }
+              : msg,
+          ),
+        );
+        void updateGenerationChip;
+      }
+    },
+    [adapter, format, focusId, running, appendChipToActiveGen, updateGenerationChip],
+  );
+
+  const handleFollowup = useCallback(
+    (item: SuggestedFollowupItem) => {
+      void handleSubmit(item.query);
+    },
+    [handleSubmit],
+  );
+
+  const handleChipFocus = useCallback((chip: GenerationChipData) => {
+    if (chip.artifactId) setFocusId(chip.artifactId);
+  }, []);
+
+  const handleSelectVariant = useCallback(
+    (shotId: string, variantId: string) => {
+      setSelectedVariantByShot((curr) => ({ ...curr, [shotId]: variantId }));
+    },
+    [],
+  );
+
+  const isEmpty = useMemo(() => thread.length === 0, [thread.length]);
+
   return (
-    <div
-      aria-hidden
-      className="pointer-events-none absolute inset-0 -z-10"
-      style={{
-        background:
-          "radial-gradient(ellipse 60% 40% at 15% 0%, var(--hc-accent-coral-soft) 0%, transparent 60%), radial-gradient(ellipse 50% 35% at 100% 100%, oklch(0.78 0.14 240 / 0.18) 0%, transparent 60%)",
-      }}
-    />
+    <div className="grid h-full grid-cols-1 lg:grid-cols-[480px_1fr]">
+      <ChatRail
+        thread={thread}
+        projectName={PROJECT_NAME}
+        live={running}
+        modelLabel="Opus 4.7"
+        adapter={adapter}
+        setAdapter={setAdapterAndUrl}
+        onSubmit={handleSubmit}
+        onChipFocus={handleChipFocus}
+        onFollowup={handleFollowup}
+        disabled={running}
+      />
+      {isEmpty ? (
+        <EmptyStateHero
+          brandName={DEFAULT_BRAND}
+          format={format}
+          setFormat={setFormat}
+          onSubmit={handleSubmit}
+          disabled={running}
+        />
+      ) : (
+        <LiquidCanvas
+          artifacts={artifacts}
+          viewMode={viewMode}
+          setViewMode={setViewMode}
+          focusId={focusId}
+          setFocusId={setFocusId}
+          selectedVariantByShot={selectedVariantByShot}
+          onSelectVariant={handleSelectVariant}
+        />
+      )}
+    </div>
   );
 }
 
-interface SseHandlers {
-  onStart: (nodeId: string) => void;
-  onComplete: (nodeId: string) => void;
-  onArtifact: (
-    nodeId: string,
-    artifact: { url: string; kind: "image" | "video" },
-  ) => void;
-  onDone: () => void;
-  onError: (msg: string) => void;
+function titleForNode(nodeId: string): string {
+  if (nodeId === "strategist") return "Reasoning · Strategist";
+  if (nodeId === "creative_director") return "Reasoning · Creative Director";
+  if (nodeId === "art_director") return "Reasoning · Art Director";
+  if (nodeId === "analyst") return "Reasoning · Performance Analyst";
+  if (nodeId === "publisher") return "Reasoning · Publisher";
+  return "Reasoning…";
 }
 
-function parseSseBlock(block: string, h: SseHandlers): void {
-  // SSE block can have multiple `event:` and `data:` lines.
+interface ParsedBlock {
+  event: string;
+  data: SsePayload;
+}
+
+function parseSseBlock(block: string): ParsedBlock | null {
   const lines = block.split("\n");
   let event = "message";
   const dataLines: string[] = [];
@@ -372,32 +488,85 @@ function parseSseBlock(block: string, h: SseHandlers): void {
     if (line.startsWith("event:")) event = line.slice(6).trim();
     else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
   }
-  if (dataLines.length === 0) return;
-  const dataStr = dataLines.join("\n");
-  let data: SsePayload = {};
+  if (dataLines.length === 0) return null;
   try {
-    data = JSON.parse(dataStr) as SsePayload;
+    return { event, data: JSON.parse(dataLines.join("\n")) as SsePayload };
   } catch {
-    return;
+    return null;
   }
+}
 
-  switch (event) {
-    case "node_start":
-      if (data.nodeId) h.onStart(data.nodeId);
-      break;
-    case "node_complete":
-      if (data.nodeId) h.onComplete(data.nodeId);
-      break;
-    case "artifact":
-      if (data.nodeId && data.artifact) h.onArtifact(data.nodeId, data.artifact);
-      break;
-    case "done":
-      h.onDone();
-      break;
-    case "error":
-      h.onError(data.message ?? "Unknown error");
-      break;
-    default:
-      break;
-  }
+interface FallbackArgs {
+  text: string;
+  setThread: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  setArtifacts: React.Dispatch<React.SetStateAction<UiArtifact[]>>;
+  setFocusId: (id: string) => void;
+  appendChipToActiveGen: (chip: GenerationChipData) => void;
+}
+
+function fallbackSyntheticRun({
+  text,
+  setThread,
+  setArtifacts,
+  setFocusId,
+  appendChipToActiveGen,
+}: FallbackArgs): void {
+  // Tiny, deterministic, demo-shaped local fallback when the backend is offline.
+  setThread((curr) => [
+    ...curr,
+    {
+      kind: "reasoning",
+      id: uid("r"),
+      text: REASONING_BY_NODE.strategist,
+      title: "Reasoning · Strategist",
+    },
+    {
+      kind: "reasoning",
+      id: uid("r"),
+      text: REASONING_BY_NODE.art_director,
+      title: "Reasoning · Art Director",
+    },
+    { kind: "generation", id: uid("gen"), chips: [] },
+  ]);
+  const variants = ["Editorial", "Golden Hour", "Overcast"];
+  const shotId = uid("shot");
+  variants.forEach((label, i) => {
+    const id = `${shotId}-v${i}`;
+    const placeholderUrl = `https://picsum.photos/seed/${shotId}-${i}/600/800`;
+    const artifact: UiArtifact = {
+      id,
+      type: "image",
+      url: placeholderUrl,
+      name: `${label} — ${text.slice(0, 32)}`,
+      source: label,
+    };
+    (artifact as unknown as { meta: Record<string, unknown> }).meta = {
+      variantOf: shotId,
+      variantLabel: label,
+      viralScore: 60 + i * 10,
+    };
+    setArtifacts((curr) => [...curr, artifact]);
+    if (i === 0) setFocusId(id);
+    appendChipToActiveGen({
+      id: uid("chip"),
+      label: "Generated image",
+      promptSummary: `${label} — ${text.slice(0, 40)}`,
+      modelName: "Nano Banana 2 (Flash Im)",
+      status: "complete",
+      elapsedSec: 7,
+      etaSec: 7,
+      shotId,
+      variantId: id,
+      artifactId: id,
+    });
+  });
+  setThread((curr) => [
+    ...curr,
+    {
+      kind: "assistant",
+      id: uid("a"),
+      text: "Three style variants are on the canvas. The golden-hour cut is leading on hook density — want me to lock it and generate matching social crops?",
+    },
+    { kind: "followups", id: uid("f"), items: DEFAULT_FOLLOWUPS },
+  ]);
 }

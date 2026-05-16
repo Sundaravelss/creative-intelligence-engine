@@ -100,18 +100,44 @@ class CampaignGraph:
                 state = evt["state"]
             yield self._public(evt)
 
-        # Emit one artifact event per format with score attached.
+        # Emit one artifact event per variant with shot grouping. The chat
+        # rail uses shotId to bucket variants under a single generation
+        # block; the canvas uses it to render a VariantStack per shot.
         score = state.get("score") or {}
-        for fmt in state.get("format_mix") or []:
+        format_mix = state.get("format_mix") or [self._format]
+        primary_format = format_mix[0]
+        variants = state.get("variants") or []
+        if not variants:
+            variants = [
+                {
+                    "shot_id": "shot_1",
+                    "variant_id": "shot_1-v0",
+                    "variant_label": "default",
+                    "prompt": (state.get("references") or [""])[0],
+                }
+            ]
+        for variant in variants:
+            artifact_id = f"art_{uuid.uuid4().hex[:10]}"
             yield {
                 "type": "artifact",
                 "artifact": {
-                    "id": f"art_{uuid.uuid4().hex[:10]}",
-                    "format": fmt,
+                    "id": artifact_id,
+                    "kind": "image",
+                    "name": f"{variant['variant_label'].title()} — {variant['shot_id']}",
+                    "url": "",  # generation adapter populates this in real runs
+                    "shotId": variant["shot_id"],
+                    "variantId": variant["variant_id"],
+                    "variantLabel": variant["variant_label"],
+                    "format": primary_format,
                     "headline": (state.get("headlines") or [None])[0],
                     "image_model": state.get("image_model"),
                     "video_model": state.get("video_model"),
                     "score": score,
+                    "meta": {
+                        "variantOf": variant["shot_id"],
+                        "variantLabel": variant["variant_label"],
+                        "prompt": variant["prompt"],
+                    },
                 },
             }
 
