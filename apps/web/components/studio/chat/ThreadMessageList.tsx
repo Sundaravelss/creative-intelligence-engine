@@ -11,6 +11,8 @@ import { SuggestedFollowups } from "./SuggestedFollowups";
 import { StartedPill } from "./StartedPill";
 import { ThoughtPill } from "./ThoughtPill";
 import { AgentStepBlock } from "./AgentStepBlock";
+import { LiveStreamProse } from "./LiveStreamProse";
+import { avatarFor, type AgentId } from "@/lib/agentAvatars";
 
 interface ThreadMessageListProps {
   thread: ChatMessage[];
@@ -101,6 +103,43 @@ export function ThreadMessageList({
                   onSelect={(item) => onFollowup?.(item)}
                 />
               );
+            case "live_stream": {
+              // Tail = last ~40 chars of the joined buffer; rendered with
+              // shimmer when isStreaming. The `data-agent` attr lets
+              // Playwright assert per-agent streaming.
+              const finalized = msg.finalized;
+              const TAIL_LEN = 40;
+              const splitAt = Math.max(0, finalized.length - TAIL_LEN);
+              const head = finalized.slice(0, splitAt);
+              const tail = finalized.slice(splitAt);
+              const avatar = avatarFor(msg.agentId as AgentId);
+              return (
+                <div
+                  key={msg.id}
+                  data-testid="cie-chat-live-stream-row"
+                  data-agent={msg.agentId}
+                  className="flex gap-3"
+                >
+                  {avatar ? (
+                    <img
+                      src={avatar.src}
+                      alt={msg.label}
+                      className="mt-0.5 h-6 w-6 shrink-0 rounded-full"
+                    />
+                  ) : null}
+                  <div className="flex flex-1 flex-col gap-1">
+                    <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                      {msg.label}
+                    </span>
+                    <LiveStreamProse
+                      finalizedText={head}
+                      streamingTail={tail}
+                      isStreaming={msg.isStreaming}
+                    />
+                  </div>
+                </div>
+              );
+            }
           }
         })}
         <div ref={endRef} />

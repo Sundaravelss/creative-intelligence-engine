@@ -17,6 +17,8 @@ interface ChatRailProps {
   onChipFocus?: (chip: GenerationChipData) => void;
   onFollowup?: (item: SuggestedFollowupItem) => void;
   disabled?: boolean;
+  isRunning?: boolean;
+  onStop?: () => void;
 }
 
 export function ChatRail({
@@ -31,6 +33,8 @@ export function ChatRail({
   onChipFocus,
   onFollowup,
   disabled,
+  isRunning,
+  onStop,
 }: ChatRailProps) {
   return (
     <aside className="flex h-full flex-col border-r border-black/5 bg-background/60 backdrop-blur-md">
@@ -50,6 +54,8 @@ export function ChatRail({
         onSubmit={onSubmit}
         onSchedule={onSchedule}
         disabled={disabled}
+        isRunning={isRunning}
+        onStop={onStop}
       />
     </aside>
   );

@@ -12,6 +12,7 @@ INSTRUCTIONS = """You are an art director for paid social ads.
 Given audience + hooks + format mix, output strict JSON:
 {
   "references": ["<short visual reference description>", ...],
+  "style_variants": ["<style label 1>", "<style label 2>", "<style label 3>"],
   "image_model": "<fal-ai model id>",
   "video_model": "<fal-ai model id>",
   "params": {
@@ -19,6 +20,16 @@ Given audience + hooks + format mix, output strict JSON:
     "style": "<one-line style note>"
   }
 }
+
+Notes for style_variants:
+- Pick exactly 3 short, brief-aware labels (2-4 words each) describing distinct
+  treatments of the SAME shot. Tailor them to the product and audience —
+  e.g. for a leather bag: "matte studio", "golden street", "rain glaze";
+  for skincare: "clean flatlay", "macro dewdrop", "soft daylight";
+  for food: "overhead market", "moody candlelit", "bright kitchen".
+- Avoid generic stand-ins like "editorial / golden-hour / overcast" unless
+  they genuinely fit the brief.
+
 Return ONLY the JSON.
 """
 
@@ -48,6 +59,27 @@ def _parse(text: str) -> dict[str, Any]:
 # orchestrator parallelises generation across these so the user sees a
 # side-by-side stack scored by Performance Analyst.
 STYLE_VARIANTS: tuple[str, ...] = ("editorial", "golden-hour", "overcast")
+
+# Whitelist of FAL image models the orchestrator is allowed to dispatch. The
+# LLM occasionally hallucinates fake model ids ("dualSense", "midjourney-v8")
+# and we MUST NOT let those reach FAL — they 404 the entire run. Any value
+# outside this set is replaced with `FAL_DEFAULT_IMAGE_MODEL` or the safe
+# default below.
+_ALLOWED_IMAGE_MODELS: frozenset[str] = frozenset(
+    {
+        "fal-ai/flux/dev",
+        "fal-ai/flux/schnell",
+        "fal-ai/flux-pro",
+        "fal-ai/nano-banana",
+    }
+)
+_ALLOWED_VIDEO_MODELS: frozenset[str] = frozenset(
+    {
+        "fal-ai/sora-2",
+        "fal-ai/kling-video/v2/master",
+        "fal-ai/veo3",
+    }
+)
 
 # Camera-angle slots used when ``brief.mode == "storyboard"``. Mirrors the
 # six slots rendered by `apps/web/components/canvas/storyboard/StoryboardGrid`.
@@ -81,10 +113,30 @@ def _variant_count() -> int:
     return max(1, min(n, len(STYLE_VARIANTS)))
 
 
+def _resolve_style_labels(
+    parsed_labels: list[str] | None, variant_count: int
+) -> tuple[str, ...]:
+    """Pick the variant labels, preferring the LLM output, falling back to
+    the static tuple. Always returns exactly ``variant_count`` labels.
+    """
+    cleaned: list[str] = []
+    if parsed_labels:
+        for raw in parsed_labels:
+            if not isinstance(raw, str):
+                continue
+            text = raw.strip()
+            if text:
+                cleaned.append(text)
+    while len(cleaned) < variant_count:
+        cleaned.append(STYLE_VARIANTS[len(cleaned) % len(STYLE_VARIANTS)])
+    return tuple(cleaned[:variant_count])
+
+
 def _expand_variants(
     references: list[str],
     keyword: str,
     variant_count: int,
+    style_labels: tuple[str, ...],
 ) -> list[dict[str, Any]]:
     """Expand each reference into ``variant_count`` style variants.
 
@@ -96,7 +148,7 @@ def _expand_variants(
     for shot_idx, ref in enumerate(references):
         shot_id = f"shot_{shot_idx + 1}"
         for variant_idx in range(variant_count):
-            style = STYLE_VARIANTS[variant_idx % len(STYLE_VARIANTS)]
+            style = style_labels[variant_idx % len(style_labels)]
             expanded.append(
                 {
                     "shot_id": shot_id,
@@ -109,7 +161,9 @@ def _expand_variants(
     return expanded
 
 
-def _expand_storyboard(keyword: str, variant_count: int) -> list[dict[str, Any]]:
+def _expand_storyboard(
+    keyword: str, variant_count: int, style_labels: tuple[str, ...]
+) -> list[dict[str, Any]]:
     """Fan a single brief into 6 camera-angle shots × N style variants.
 
     Used when the brief carries ``mode == "storyboard"``. The resulting
@@ -122,7 +176,7 @@ def _expand_storyboard(keyword: str, variant_count: int) -> list[dict[str, Any]]
         shot_id = f"shot_{shot_kind}"
         framing = _SHOT_KIND_PROMPTS[shot_kind]
         for variant_idx in range(variant_count):
-            style = STYLE_VARIANTS[variant_idx % len(STYLE_VARIANTS)]
+            style = style_labels[variant_idx % len(style_labels)]
             expanded.append(
                 {
                     "shot_id": shot_id,
@@ -148,6 +202,7 @@ async def forward(state: dict[str, Any], runtime: Any) -> dict[str, Any]:
         runtime=RuntimeState(),
         config=state.get("adapter_config", {}),
         context={"prompt": json.dumps(payload, ensure_ascii=False)},
+        on_log=state.get("on_log"),
     )
     result = await runtime.execute(ctx)
     parsed = _parse((result.result_json or {}).get("text", ""))
@@ -158,17 +213,35 @@ async def forward(state: dict[str, Any], runtime: Any) -> dict[str, Any]:
     keyword = brief.get("keyword", "product")
     mode = brief.get("mode")
     variant_count = _variant_count()
+    style_labels = _resolve_style_labels(
+        parsed.get("style_variants"), variant_count
+    )
     if mode == "storyboard":
-        variants = _expand_storyboard(keyword, variant_count)
+        variants = _expand_storyboard(keyword, variant_count, style_labels)
     else:
-        variants = _expand_variants(references, keyword, variant_count)
+        variants = _expand_variants(references, keyword, variant_count, style_labels)
+    parsed_image = parsed.get("image_model")
+    image_model = (
+        parsed_image
+        if parsed_image in _ALLOWED_IMAGE_MODELS
+        else os.environ.get("FAL_DEFAULT_IMAGE_MODEL", "fal-ai/flux/dev")
+    )
+    if image_model not in _ALLOWED_IMAGE_MODELS:
+        image_model = "fal-ai/flux/dev"
+    parsed_video = parsed.get("video_model")
+    video_model = (
+        parsed_video
+        if parsed_video in _ALLOWED_VIDEO_MODELS
+        else os.environ.get("FAL_DEFAULT_VIDEO_MODEL", "fal-ai/sora-2")
+    )
+    if video_model not in _ALLOWED_VIDEO_MODELS:
+        video_model = "fal-ai/sora-2"
     return {
         **state,
         "references": references,
-        "image_model": parsed.get("image_model")
-        or os.environ.get("FAL_DEFAULT_IMAGE_MODEL", "fal-ai/flux/dev"),
-        "video_model": parsed.get("video_model")
-        or os.environ.get("FAL_DEFAULT_VIDEO_MODEL", "fal-ai/sora-2"),
+        "style_variants": list(style_labels),
+        "image_model": image_model,
+        "video_model": video_model,
         "art_params": parsed.get("params") or {"aspect_ratio": "9:16", "style": "clean editorial"},
         "variants": variants,
     }
@@ -178,5 +251,6 @@ __all__ = [
     "INSTRUCTIONS",
     "STYLE_VARIANTS",
     "STORYBOARD_SHOT_KINDS",
+    "_resolve_style_labels",
     "forward",
 ]

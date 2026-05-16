@@ -28,7 +28,14 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import Any, AsyncIterator
+from typing import Any, Awaitable, Callable, AsyncIterator
+
+# Type alias for an async image generator. Given a prompt + params, returns the
+# final URL of a hosted asset (or None if generation failed). The orchestrator
+# fans this out across all variants in parallel; the API layer wires this to
+# `services/api/adapters_gen/fal.stream_generate` and the agents package stays
+# free of HTTP/FAL coupling.
+GenerateImageFn = Callable[[str, dict[str, Any]], Awaitable[str | None]]
 
 from .nodes import (
     analyst,
@@ -110,6 +117,7 @@ class CampaignGraph:
         format: str = "reel",
         adapter_config: dict[str, Any] | None = None,
         run_id: str | None = None,
+        generate_image: GenerateImageFn | None = None,
     ) -> None:
         self._brief = dict(brief or {})
         self._brand = dict(brand or {})
@@ -117,6 +125,10 @@ class CampaignGraph:
         self._format = format
         self._adapter_config = dict(adapter_config or {})
         self._run_id = run_id or f"cg_{uuid.uuid4().hex[:12]}"
+        # Optional async image generator. Tests pass a fake; the API layer
+        # wires this to FAL. When None, artifacts are emitted with empty URLs
+        # (legacy behavior; lets tests run without external services).
+        self._generate_image = generate_image
 
     async def run(self) -> AsyncIterator[dict[str, Any]]:
         start = time.monotonic()
@@ -188,6 +200,10 @@ class CampaignGraph:
         # 3 + 4. Copywriter and Art Director in parallel.
         # v3 W0: emit one agent_step_* pair per agent so the chat can render
         # two side-by-side step blocks while they run concurrently.
+        # Streaming: per-agent text_delta events are interleaved as both
+        # adapters push chunks into their own queues. Each queue is tagged
+        # with its node_id so the chat can route deltas to the right
+        # live_stream message.
         yield {"type": "node_start", "node_id": "copywriter+art_director"}
         yield {
             "type": "agent_step_start",
@@ -201,12 +217,68 @@ class CampaignGraph:
             "label": _NODE_LABELS["art_director"],
             "totalSubsteps": 2,
         }
-        copy_task = asyncio.create_task(copywriter.forward(state, self._runtime))
-        art_task = asyncio.create_task(art_director.forward(state, self._runtime))
+
+        merged_queue: asyncio.Queue[tuple[str, str, str | None]] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def _make_on_log(node_id: str):
+            async def _on_log(stream: str, chunk: str) -> None:
+                # Same filter as _run_node — drop bracketed status lines.
+                if stream != "stdout" or not chunk:
+                    return
+                stripped = chunk.lstrip()
+                if not stripped or stripped.startswith("["):
+                    return
+                await merged_queue.put((node_id, "delta", chunk))
+            return _on_log
+
+        copy_state_obj = {**state, "on_log": _make_on_log("copywriter")}
+        art_state_obj = {**state, "on_log": _make_on_log("art_director")}
+        copy_task = asyncio.create_task(copywriter.forward(copy_state_obj, self._runtime))
+        art_task = asyncio.create_task(art_director.forward(art_state_obj, self._runtime))
+
+        copy_task.add_done_callback(
+            lambda _t: loop.call_soon_threadsafe(
+                merged_queue.put_nowait, ("copywriter", "end", None)
+            )
+        )
+        art_task.add_done_callback(
+            lambda _t: loop.call_soon_threadsafe(
+                merged_queue.put_nowait, ("art_director", "end", None)
+            )
+        )
+
+        copy_full: list[str] = []
+        art_full: list[str] = []
+        ended: set[str] = set()
+        while len(ended) < 2:
+            node_id, kind, payload = await merged_queue.get()
+            if kind == "delta" and payload:
+                if node_id == "copywriter":
+                    copy_full.append(payload)
+                else:
+                    art_full.append(payload)
+                yield {
+                    "type": "text_delta",
+                    "nodeId": node_id,
+                    "agentId": node_id,
+                    "chunk": payload,
+                }
+            elif kind == "end":
+                ended.add(node_id)
+                yield {
+                    "type": "text_done",
+                    "nodeId": node_id,
+                    "agentId": node_id,
+                    "fullText": "".join(copy_full if node_id == "copywriter" else art_full),
+                }
+
         copy_state, art_state = await asyncio.gather(
             copy_task, art_task, return_exceptions=False
         )
-        # Merge — both produce disjoint keys.
+        # Merge — both produce disjoint keys (drop on_log to avoid leakage).
+        copy_state.pop("on_log", None)
+        art_state.pop("on_log", None)
         state = {**state, **copy_state, **art_state}
         yield {
             "type": "node_complete",
@@ -259,15 +331,45 @@ class CampaignGraph:
                     "prompt": (state.get("references") or [""])[0],
                 }
             ]
-        for variant in variants:
+
+        image_model = state.get("image_model") or "fal-ai/flux/schnell"
+        art_params = state.get("art_params") or {}
+        aspect_ratio = art_params.get("aspect_ratio")
+
+        # Fan out generation across all variants in parallel. Each task
+        # returns (variant, url, error_message). When `_generate_image` is
+        # unset we skip the round-trip and emit artifacts with empty URLs.
+        async def _gen_one(
+            variant: dict[str, Any],
+        ) -> tuple[dict[str, Any], str | None, str | None]:
+            if self._generate_image is None:
+                return variant, None, None
+            params: dict[str, Any] = {"prompt": variant["prompt"]}
+            if aspect_ratio:
+                params["aspect_ratio"] = aspect_ratio
+            try:
+                url = await self._generate_image(image_model, params)
+                return variant, url, None
+            except Exception as exc:  # noqa: BLE001 — surface as event
+                logger.exception(
+                    "image generation failed for variant %s", variant.get("variant_id")
+                )
+                return variant, None, str(exc)
+
+        gen_results = await asyncio.gather(*[_gen_one(v) for v in variants])
+
+        for variant, url, err in gen_results:
             artifact_id = f"art_{uuid.uuid4().hex[:10]}"
+            label_text = str(variant["variant_label"]).strip() or "variant"
+            artifact_name = f"{label_text.title()} — {variant['shot_id']}"
+            artifact_url = url or ""
             yield {
                 "type": "artifact",
                 "artifact": {
                     "id": artifact_id,
                     "kind": "image",
-                    "name": f"{variant['variant_label'].title()} — {variant['shot_id']}",
-                    "url": "",  # generation adapter populates this in real runs
+                    "name": artifact_name,
+                    "url": artifact_url,
                     "shotId": variant["shot_id"],
                     "shotKind": variant.get("shot_kind"),
                     "variantId": variant["variant_id"],
@@ -282,9 +384,17 @@ class CampaignGraph:
                         "variantLabel": variant["variant_label"],
                         "shotKind": variant.get("shot_kind"),
                         "prompt": variant["prompt"],
+                        "generationError": err,
                     },
                 },
             }
+            if err:
+                yield {
+                    "type": "error",
+                    "node_id": "art_director",
+                    "variantId": variant["variant_id"],
+                    "error": err,
+                }
 
         # 6. Publisher (non-reasoning → emits agent_step_*)
         async for evt in self._run_node_with_step("publisher", publisher.forward, state):
@@ -307,13 +417,87 @@ class CampaignGraph:
     async def _run_node(
         self, node_id: str, fn: Any, state: dict[str, Any]
     ) -> AsyncIterator[dict[str, Any]]:
+        """Run a node and yield streaming + lifecycle events.
+
+        Wires an ``on_log`` callback into the node's state so the adapter can
+        push per-token chunks into an ``asyncio.Queue``. Drained chunks are
+        re-emitted as ``text_delta`` events; once the node task completes a
+        single ``text_done`` event marks the end of streaming. Legacy
+        ``node_start`` / ``node_complete`` events still fire so existing chat
+        consumers keep working.
+        """
+        agent_id = _NODE_TO_AGENT_ID.get(node_id, node_id)
         yield {"type": "node_start", "node_id": node_id}
-        try:
-            new_state = await fn(state, self._runtime)
-        except Exception as exc:  # noqa: BLE001 — surface as event
-            logger.exception("node %s failed", node_id)
-            yield {"type": "error", "node_id": node_id, "error": str(exc)}
+
+        queue: asyncio.Queue[tuple[str, str | None]] = asyncio.Queue()
+        full_text_parts: list[str] = []
+
+        async def _on_log(stream: str, chunk: str) -> None:
+            # Only stdout chunks are user-visible reasoning. stderr is
+            # diagnostic. Adapters also emit bracketed status lines on stdout
+            # ("[runtime] try adapter=...", "[claude_code] spawn claude") —
+            # those are noise, not reasoning, and would render as garbage in
+            # the chat. Skip any chunk that starts with `[` (the bracketed
+            # status convention) or is purely whitespace.
+            if stream != "stdout" or not chunk:
+                return
+            stripped = chunk.lstrip()
+            if not stripped or stripped.startswith("["):
+                return
+            await queue.put(("delta", chunk))
+
+        # Inject the callback into state so the node's AdapterExecutionContext
+        # picks it up via state.get("on_log").
+        state_with_log = {**state, "on_log": _on_log}
+        node_task = asyncio.create_task(fn(state_with_log, self._runtime))
+
+        # Sentinel: when the task finishes, drop a "done" marker so the queue
+        # drainer breaks out cleanly. Use the running loop because
+        # add_done_callback fires from a background context where there may
+        # be no current event loop.
+        loop = asyncio.get_running_loop()
+        node_task.add_done_callback(
+            lambda _t: loop.call_soon_threadsafe(queue.put_nowait, ("end", None))
+        )
+
+        new_state: dict[str, Any] | None = None
+        node_error: BaseException | None = None
+        while True:
+            kind, payload = await queue.get()
+            if kind == "delta" and payload:
+                full_text_parts.append(payload)
+                yield {
+                    "type": "text_delta",
+                    "nodeId": node_id,
+                    "agentId": agent_id,
+                    "chunk": payload,
+                }
+                continue
+            # kind == "end"
+            try:
+                new_state = node_task.result()
+            except BaseException as exc:  # noqa: BLE001 — re-raised below
+                node_error = exc
+            break
+
+        # Always emit text_done (even on failure or empty stream) so the UI
+        # knows to stop the shimmer.
+        yield {
+            "type": "text_done",
+            "nodeId": node_id,
+            "agentId": agent_id,
+            "fullText": "".join(full_text_parts),
+        }
+
+        if node_error is not None or new_state is None:
+            logger.exception("node %s failed", node_id, exc_info=node_error)
+            yield {
+                "type": "error",
+                "node_id": node_id,
+                "error": str(node_error) if node_error else "node returned no state",
+            }
             return
+
         yield {
             "type": "node_complete",
             "node_id": node_id,
@@ -321,7 +505,7 @@ class CampaignGraph:
             "output": {
                 k: v
                 for k, v in new_state.items()
-                if k not in {"brief", "brand", "adapter_config", "run_id"}
+                if k not in {"brief", "brand", "adapter_config", "run_id", "on_log"}
                 and not isinstance(v, dict)
             },
         }

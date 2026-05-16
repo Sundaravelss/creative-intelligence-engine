@@ -5,7 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   useState,
 } from "react";
-import { ArrowUp, CalendarClock, ChevronDown } from "lucide-react";
+import { ArrowUp, CalendarClock, ChevronDown, Square } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,7 +21,6 @@ import { PlusMenu } from "../PlusMenu";
 
 const ADAPTERS: Array<{ id: string; label: string }> = [
   { id: "openai", label: "OpenAI" },
-  { id: "claude", label: "Claude Code" },
   { id: "pioneer", label: "Pioneer" },
   { id: "hermes", label: "Hermes" },
 ];
@@ -33,6 +32,10 @@ interface ComposerFooterProps {
   /** Open the schedule modal seeded with the current draft. */
   onSchedule?: (currentText: string) => void;
   disabled?: boolean;
+  /** True while a campaign is streaming. Replaces send with a Stop button. */
+  isRunning?: boolean;
+  /** Aborts the in-progress campaign fetch. Required when `isRunning`. */
+  onStop?: () => void;
 }
 
 export function ComposerFooter({
@@ -41,6 +44,8 @@ export function ComposerFooter({
   onSubmit,
   onSchedule,
   disabled,
+  isRunning,
+  onStop,
 }: ComposerFooterProps) {
   const [text, setText] = useState("");
 
@@ -123,15 +128,29 @@ export function ComposerFooter({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button
-            type="submit"
-            size="icon"
-            disabled={!text.trim() || disabled}
-            className="h-8 w-8 rounded-full bg-foreground text-background hover:bg-foreground/90"
-            aria-label="Send"
-          >
-            <ArrowUp className="h-4 w-4" />
-          </Button>
+          {isRunning ? (
+            <Button
+              type="button"
+              size="icon"
+              onClick={onStop}
+              data-testid="cie-composer-stop"
+              className="h-8 w-8 rounded-full bg-foreground text-background hover:bg-foreground/90"
+              aria-label="Stop streaming"
+              title="Stop the in-progress run"
+            >
+              <Square className="h-3.5 w-3.5 fill-current" />
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              size="icon"
+              disabled={!text.trim() || disabled}
+              className="h-8 w-8 rounded-full bg-foreground text-background hover:bg-foreground/90"
+              aria-label="Send"
+            >
+              <ArrowUp className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </div>
     </form>

@@ -60,4 +60,17 @@ export type ChatMessage =
       total: number;
       substeps: AgentStepSubstep[];
       collapsed?: boolean;
+    }
+  | {
+      // Transient — appears while a node's adapter is streaming tokens.
+      // The studio page mutates `finalized` per `text_delta` event and
+      // flips `isStreaming` to false on `text_done`. The next canonical
+      // event for the same agentId (`thought` / `agent_step_complete`)
+      // replaces it in place via matching `id` (= node id).
+      kind: "live_stream";
+      id: string;
+      agentId: AgentId | string;
+      label: string;
+      finalized: string;
+      isStreaming: boolean;
     };

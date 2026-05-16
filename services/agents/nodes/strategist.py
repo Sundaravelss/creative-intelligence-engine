@@ -57,6 +57,7 @@ async def forward(state: dict[str, Any], runtime: Any) -> dict[str, Any]:
         runtime=RuntimeState(),
         config=state.get("adapter_config", {}),
         context={"prompt": prompt},
+        on_log=state.get("on_log"),
     )
     result = await runtime.execute(ctx)
     text = (result.result_json or {}).get("text", "") if result else ""
