@@ -25,14 +25,23 @@ export function ThreadMessageList({
   onChipFocus,
   onFollowup,
 }: ThreadMessageListProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    // Programmatically scroll the inner container ONLY (not via
+    // scrollIntoView, which can hijack the document scroll on WebKit when
+    // the overflow chain isn't perfect).
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [thread]);
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
+    <div
+      ref={scrollRef}
+      className="min-h-0 flex-1 overflow-y-scroll overscroll-contain px-4 py-6"
+      style={{ scrollbarGutter: "stable" }}
+    >
       <div className="flex flex-col gap-5">
         {thread.map((msg) => {
           switch (msg.kind) {

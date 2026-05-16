@@ -58,6 +58,14 @@ SUPPORTED_MODELS: dict[str, dict[str, Any]] = {
         "kind": "image",
         "default_params": {"image_size": "landscape_4_3", "num_inference_steps": 4},
     },
+    "fal-ai/flux/dev/image-to-image": {
+        "kind": "image",
+        "default_params": {
+            "image_size": "square_hd",
+            "num_inference_steps": 28,
+            "strength": 0.75,
+        },
+    },
     "fal-ai/flux-pro": {
         "kind": "image",
         "default_params": {"image_size": "landscape_4_3"},
@@ -136,6 +144,48 @@ def _normalize_status(payload: dict[str, Any]) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
+async def upload_file(content: bytes, filename: str, content_type: str) -> str:
+    """Upload a file to FAL storage and return the public URL.
+
+    Two-step flow per FAL's docs:
+      1. POST /storage/upload/initiate  → returns {"upload_url", "file_url"}
+      2. PUT  <upload_url> with the file body
+
+    The returned ``file_url`` is what callers pass as ``image_url`` to FAL
+    image-to-image / video models.
+
+    Raises:
+        RuntimeError: if FAL_KEY is missing.
+        httpx.HTTPError: on transport failures.
+    """
+    init_resp_payload: dict[str, Any]
+    timeout = httpx.Timeout(60.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        init_resp = await client.post(
+            "https://rest.alpha.fal.ai/storage/upload/initiate",
+            headers=_auth_headers(),
+            json={"file_name": filename, "content_type": content_type},
+        )
+        init_resp.raise_for_status()
+        init_resp_payload = init_resp.json()
+
+        upload_url = init_resp_payload.get("upload_url")
+        file_url = init_resp_payload.get("file_url")
+        if not upload_url or not file_url:
+            raise RuntimeError(
+                f"FAL upload initiate missing fields: {init_resp_payload}"
+            )
+
+        put_resp = await client.put(
+            upload_url,
+            headers={"Content-Type": content_type},
+            content=content,
+        )
+        put_resp.raise_for_status()
+
+    return str(file_url)
+
+
 async def submit(model_id: str, params: dict[str, Any]) -> str:
     """Submit a generation job to FAL's queue and return the request_id.
 
@@ -157,13 +207,27 @@ async def submit(model_id: str, params: dict[str, Any]) -> str:
     return str(request_id)
 
 
+def _app_namespace(model_id: str) -> str:
+    """Return the app namespace used for status/result polling.
+
+    FAL's queue API submits to the full model path (e.g. ``fal-ai/flux/schnell``)
+    but status and result must be polled at the app level (e.g. ``fal-ai/flux``).
+    For single-segment apps (``fal-ai/nano-banana``) this is a no-op.
+    """
+    parts = model_id.strip("/").split("/")
+    if len(parts) >= 2:
+        return f"{parts[0]}/{parts[1]}"
+    return model_id
+
+
 async def poll(request_id: str, model_id: str) -> dict[str, Any]:
     """One-shot status poll. Returns the parsed JSON.
 
     The status endpoint includes ``logs`` (optional) and ``status``. When the
     job is COMPLETED, callers should fetch the full result via :func:`fetch_result`.
     """
-    url = f"{FAL_QUEUE_BASE}/{model_id}/requests/{request_id}/status"
+    namespace = _app_namespace(model_id)
+    url = f"{FAL_QUEUE_BASE}/{namespace}/requests/{request_id}/status"
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
         resp = await client.get(url, headers=_auth_headers(), params={"logs": "1"})
         resp.raise_for_status()
@@ -172,7 +236,8 @@ async def poll(request_id: str, model_id: str) -> dict[str, Any]:
 
 async def fetch_result(request_id: str, model_id: str) -> dict[str, Any]:
     """Fetch the final result payload for a completed request."""
-    url = f"{FAL_QUEUE_BASE}/{model_id}/requests/{request_id}"
+    namespace = _app_namespace(model_id)
+    url = f"{FAL_QUEUE_BASE}/{namespace}/requests/{request_id}"
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
         resp = await client.get(url, headers=_auth_headers())
         resp.raise_for_status()

@@ -3,9 +3,11 @@
 import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
   useState,
 } from "react";
-import { ArrowUp, CalendarClock, ChevronDown, Square } from "lucide-react";
+import { ArrowUp, CalendarClock, ChevronDown, Square, X } from "lucide-react";
+import { toast } from "sonner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,6 +28,13 @@ const ADAPTERS: Array<{ id: string; label: string }> = [
   { id: "hermes", label: "Hermes" },
 ];
 
+interface ChatAttachment {
+  url: string;
+  filename: string;
+  contentType: string;
+  preview: string; // local object URL for thumbnail
+}
+
 interface ComposerFooterProps {
   adapter: string;
   setAdapter: (id: string) => void;
@@ -39,6 +48,10 @@ interface ComposerFooterProps {
   onStop?: () => void;
 }
 
+const API_BASE =
+  (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_API_BASE_URL) ||
+  "http://localhost:8100";
+
 export function ComposerFooter({
   adapter,
   setAdapter,
@@ -49,12 +62,68 @@ export function ComposerFooter({
   onStop,
 }: ComposerFooterProps) {
   const [text, setText] = useState("");
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+
+  const handleFiles = useCallback(async (files: File[]) => {
+    setUploading(true);
+    try {
+      // Upload sequentially so we get clean error messages per file.
+      for (const f of files) {
+        const form = new FormData();
+        form.append("file", f, f.name);
+        const res = await fetch(`${API_BASE}/api/chat/upload`, {
+          method: "POST",
+          body: form,
+        });
+        if (!res.ok) {
+          const detail = await res.text();
+          toast.error(`Upload failed: ${f.name} (${res.status})`);
+          console.error("upload", res.status, detail);
+          continue;
+        }
+        const payload = (await res.json()) as {
+          url: string;
+          filename: string;
+          contentType: string;
+        };
+        setAttachments((curr) => [
+          ...curr,
+          {
+            url: payload.url,
+            filename: payload.filename,
+            contentType: payload.contentType,
+            preview: URL.createObjectURL(f),
+          },
+        ]);
+      }
+    } finally {
+      setUploading(false);
+    }
+  }, []);
+
+  const removeAttachment = useCallback((idx: number) => {
+    setAttachments((curr) => {
+      const a = curr[idx];
+      if (a) URL.revokeObjectURL(a.preview);
+      return curr.filter((_, i) => i !== idx);
+    });
+  }, []);
 
   function submit(e?: FormEvent) {
     e?.preventDefault();
     const value = text.trim();
     if (!value || disabled) return;
-    onSubmit(value);
+    // Inject `<attached_image url="..." />` blocks so Sage's persona can
+    // route to image-to-image with that reference.
+    const tags = attachments
+      .map((a) => `<attached_image url="${a.url}" />`)
+      .join("\n");
+    const composed = tags ? `${value}\n\n${tags}` : value;
+    onSubmit(composed);
+    // Clear local state.
+    attachments.forEach((a) => URL.revokeObjectURL(a.preview));
+    setAttachments([]);
     setText("");
   }
 
@@ -75,6 +144,37 @@ export function ComposerFooter({
       className="sticky bottom-0 z-10 border-t border-black/5 bg-background/95 px-3 py-3 backdrop-blur-md"
     >
       <div className="flex flex-col gap-2 rounded-2xl border border-black/10 bg-white/85 p-2 shadow-sm focus-within:border-black/20">
+        {attachments.length > 0 ? (
+          <div className="flex flex-wrap gap-2 px-1">
+            {attachments.map((a, idx) => (
+              <div
+                key={a.url}
+                className="group relative h-16 w-16 overflow-hidden rounded-lg border border-black/10 bg-muted/30"
+                title={a.filename}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={a.preview}
+                  alt={a.filename}
+                  className="h-full w-full object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(idx)}
+                  className="absolute right-0.5 top-0.5 rounded-full bg-black/60 p-0.5 text-white opacity-0 transition group-hover:opacity-100"
+                  aria-label={`Remove ${a.filename}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+            {uploading ? (
+              <div className="flex h-16 w-16 items-center justify-center rounded-lg border border-dashed border-black/15 text-[10px] text-muted-foreground">
+                Uploading…
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -85,7 +185,7 @@ export function ComposerFooter({
           disabled={disabled}
         />
         <div className="flex items-center gap-2">
-          <PlusMenu onSchedule={handleSchedule} />
+          <PlusMenu onSchedule={handleSchedule} onFiles={handleFiles} />
           <Button
             type="button"
             variant="ghost"

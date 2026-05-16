@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlmodel import delete, select
 
@@ -299,24 +299,30 @@ class ChatCompletionsInput(BaseModel):
     adapter: str | None = None
 
 
-# Sentinel-tag protocol: persona emits `<image prompt="..." aspect="9:16"/>`
-# inline. The streaming chunk parser in ``_consume_stream`` detects the tag,
-# pauses text passthrough until the closing `/>`, and dispatches FAL.
+# Sentinel-tag protocol: persona emits
+#   <image prompt="..." aspect="9:16" />                  ← text-to-image
+#   <image prompt="..." aspect="..." reference_url="..."/> ← image-to-image
+#
+# The streaming chunk parser detects the tag, pauses text passthrough until
+# the closing `/>`, and dispatches FAL (text-to-image OR image-to-image
+# based on whether reference_url is present). Three styled variants are
+# emitted per sentinel.
 _IMAGE_TAG_PATTERN = re.compile(
     r"""
-    <image\s+                                # opening
-    (?:[^>]*\s)?                             # ignore extra attributes
-    prompt\s*=\s*"(?P<prompt>[^"]*)"         # required prompt
-    (?:[^>]*\s)?
-    (?:aspect\s*=\s*"(?P<aspect>[^"]*)")?    # optional aspect
-    [^>]*
-    />                                       # self-closing
+    <image\s+                                          # opening
+    (?P<attrs>[^>]*?)                                  # all attributes (we parse them below)
+    \s*/>                                              # self-closing
     """,
     re.VERBOSE | re.IGNORECASE | re.DOTALL,
 )
+_ATTR_PATTERN = re.compile(
+    r'(?P<key>\w+)\s*=\s*"(?P<value>[^"]*)"', re.IGNORECASE
+)
 
-# Default FAL image model when persona doesn't specify one. Cheap + fast.
+# Default FAL models. Cheap + fast for from-scratch; flux/dev/image-to-image
+# when the persona supplies a reference_url.
 _DEFAULT_FAL_MODEL = "fal-ai/flux/schnell"
+_I2I_FAL_MODEL = "fal-ai/flux/dev/image-to-image"
 
 _ASPECT_TO_IMAGE_SIZE: dict[str, str] = {
     "9:16": "portrait_16_9",
@@ -349,13 +355,32 @@ def _build_user_prompt(messages: list[ChatMessageInput]) -> str:
 
 
 async def _generate_image(
-    prompt: str, aspect: str | None
+    prompt: str,
+    aspect: str | None,
+    reference_url: str | None = None,
 ) -> tuple[str | None, str | None]:
-    """Submit a FAL request and return (url, error). Network-bound; ~5-30 s."""
+    """Submit a FAL request and return (url, error). Network-bound; ~5-30 s.
+
+    When ``reference_url`` is supplied, dispatches to
+    ``fal-ai/flux/dev/image-to-image`` so the result is a styled variation
+    of the user's uploaded image rather than a from-scratch generation.
+    """
     from adapters_gen import fal  # type: ignore[import-not-found]
 
-    model_id = _DEFAULT_FAL_MODEL
-    params: dict[str, Any] = {"prompt": prompt}
+    if reference_url:
+        model_id = _I2I_FAL_MODEL
+        params: dict[str, Any] = {
+            "prompt": prompt,
+            "image_url": reference_url,
+            # 0.75 keeps recognizable composition while honoring the new
+            # style suffix in the prompt. 1.0 = pure text-to-image, 0.0 = no
+            # change.
+            "strength": 0.75,
+        }
+    else:
+        model_id = _DEFAULT_FAL_MODEL
+        params = {"prompt": prompt}
+
     image_size = _ASPECT_TO_IMAGE_SIZE.get((aspect or "1:1").strip())
     if image_size:
         params["image_size"] = image_size
@@ -487,8 +512,14 @@ async def _drive_chat_stream(
                         "agentId": persona.id,
                         "chunk": before,
                     }
-                tag_prompt = (match.group("prompt") or "").strip()
-                tag_aspect = (match.group("aspect") or "1:1").strip()
+                # Parse all key="value" attributes inside the sentinel.
+                attrs: dict[str, str] = {
+                    m.group("key").lower(): m.group("value")
+                    for m in _ATTR_PATTERN.finditer(match.group("attrs") or "")
+                }
+                tag_prompt = (attrs.get("prompt") or "").strip()
+                tag_aspect = (attrs.get("aspect") or "1:1").strip()
+                tag_reference_url = (attrs.get("reference_url") or "").strip() or None
                 shot_id = f"shot_{uuid.uuid4().hex[:8]}"
 
                 # Fan out 3 style variants in parallel. Each variant suffixes
@@ -505,12 +536,15 @@ async def _drive_chat_stream(
                 for (label, _suffix), tool_use_id in zip(variants, tool_use_ids):
                     yield {
                         "type": "tool_use",
-                        "tool": "generate_image",
+                        "tool": (
+                            "edit_image" if tag_reference_url else "generate_image"
+                        ),
                         "toolUseId": tool_use_id,
                         "input": {
                             "prompt": tag_prompt,
                             "aspect": tag_aspect,
                             "variantLabel": label,
+                            "referenceUrl": tag_reference_url,
                         },
                     }
 
@@ -518,7 +552,9 @@ async def _drive_chat_stream(
                     label: str, suffix: str
                 ) -> tuple[str, str, str | None, str | None]:
                     full_prompt = f"{tag_prompt}, {suffix}"
-                    url, err = await _generate_image(full_prompt, tag_aspect)
+                    url, err = await _generate_image(
+                        full_prompt, tag_aspect, reference_url=tag_reference_url
+                    )
                     return label, full_prompt, url, err
 
                 results = await asyncio.gather(
@@ -612,6 +648,31 @@ async def _drive_chat_stream(
         "agentId": persona.id,
         "all_adapters_failed": bool(meta_failed),
     }
+
+
+@router.post("/upload")
+async def chat_upload(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Proxy a multipart upload to FAL storage and return the public URL.
+
+    Used by the Studio composer's `+` button so the browser doesn't need a
+    FAL_KEY. The returned URL is what the user message includes via
+    `<attached_image url="..." />` so Sage can route it to image-to-image.
+    """
+    from adapters_gen import fal  # type: ignore[import-not-found]
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="empty file")
+    filename = file.filename or "upload.bin"
+    content_type = file.content_type or "application/octet-stream"
+
+    try:
+        url = await fal.upload_file(content, filename, content_type)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("FAL storage upload failed")
+        raise HTTPException(status_code=502, detail=f"FAL upload failed: {exc}") from exc
+
+    return {"url": url, "filename": filename, "contentType": content_type}
 
 
 @router.post("/completions")

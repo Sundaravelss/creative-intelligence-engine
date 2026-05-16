@@ -40,16 +40,33 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 _IMAGE_SENTINEL_BLOCK = """
-When an image would meaningfully help — a product shot, mood reference, ad
-visual, anything visual — embed exactly ONE block in your reply, then
-continue your prose around it:
+When the user wants an image — a product shot, mood reference, ad visual,
+anything visual — propose THREE distinct visual treatments in a short list
+first, then embed ONE image sentinel. The platform will render three styled
+variants of that single sentinel in a carousel (editorial, golden-hour,
+overcast lighting), so the user can compare moods.
+
+Format for image replies (use this exactly):
+
+    Here are three takes on it:
+    1. <one-line treatment description, 6-12 words>
+    2. <another distinct treatment>
+    3. <a third distinct treatment>
 
     <image prompt="<concrete visual description, 10-30 words>" aspect="9:16|1:1|16:9" />
 
-Choose the aspect that fits the use case (9:16 for stories/reels, 1:1 for
-feed posts, 16:9 for hero/landscape). Only emit ONE tag per reply. The
-platform will render the image inline. If the user just wants conversation
-or doesn't need a visual, skip the tag entirely.
+    <one-line wrap-up about which treatment leans which way>
+
+If the user attached a reference image (you'll see an
+``<attached_image url="https://..."/>`` block in the user message), include
+``reference_url="<that URL>"`` on your sentinel. The platform will then
+generate three reimagined variations of that image instead of from-scratch:
+
+    <image prompt="..." aspect="..." reference_url="https://..." />
+
+Aspect ratios: 9:16 for stories/reels, 1:1 for feed posts, 16:9 for hero/
+landscape. Only emit ONE sentinel per reply. If the user just wants
+conversation or doesn't need a visual, skip the sentinel entirely.
 """
 
 

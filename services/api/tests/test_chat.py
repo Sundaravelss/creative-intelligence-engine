@@ -249,7 +249,9 @@ def test_chat_completions_dispatches_fal_on_image_sentinel(
     # Monkey-patch the chat router's FAL helper so we don't hit network.
     from routers import chat as chat_router
 
-    async def _fake_generate(prompt: str, aspect: str | None):
+    async def _fake_generate(
+        prompt: str, aspect: str | None, reference_url: str | None = None
+    ):
         return ("https://cdn.fal.test/img.png", None)
 
     monkeypatch.setattr(chat_router, "_generate_image", _fake_generate)
@@ -294,6 +296,70 @@ def test_chat_completions_dispatches_fal_on_image_sentinel(
     assert "/>" not in joined
     assert joined.startswith("Sure, here's an editorial take —")
     assert joined.endswith("Hope that captures the mood.")
+
+
+@pytest.mark.unit
+def test_chat_completions_image_edit_passes_reference_url(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the persona emits a sentinel with `reference_url`, the backend
+    routes each variant through the image-to-image FAL path (passing the
+    upload URL through to FAL)."""
+    sample = (
+        "Three takes on it:\n"
+        "1. Editorial studio\n"
+        "2. Lifestyle on cobblestone\n"
+        "3. Macro detail\n"
+        '<image prompt="leather wallet on neutral background" aspect="1:1" '
+        'reference_url="https://fal.cdn/uploads/abc.jpg" />'
+    )
+    _patch_runtime_with_text(monkeypatch, sample)
+
+    captured_calls: list[dict] = []
+
+    async def _fake_generate(
+        prompt: str, aspect: str | None, reference_url: str | None = None
+    ):
+        captured_calls.append(
+            {
+                "prompt": prompt,
+                "aspect": aspect,
+                "reference_url": reference_url,
+            }
+        )
+        return ("https://cdn.fal.test/edited.png", None)
+
+    from routers import chat as chat_router
+
+    monkeypatch.setattr(chat_router, "_generate_image", _fake_generate)
+
+    resp = client.post(
+        "/api/chat/completions",
+        json={
+            "messages": [
+                {"role": "user", "content": "Make 3 reimaginings of my wallet"}
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    events = _parse_sse(resp.text)
+
+    # 3 variants, each routed through image-to-image with the same reference.
+    assert len(captured_calls) == 3
+    for call in captured_calls:
+        assert call["reference_url"] == "https://fal.cdn/uploads/abc.jpg"
+        assert call["aspect"] == "1:1"
+        assert "leather wallet" in call["prompt"]
+
+    # tool_use events use the "edit_image" tool name (vs "generate_image"
+    # for from-scratch).
+    tool_uses = [d for e, d in events if e == "tool_use"]
+    assert len(tool_uses) == 3
+    assert all(tu["tool"] == "edit_image" for tu in tool_uses)
+    assert all(
+        tu["input"]["referenceUrl"] == "https://fal.cdn/uploads/abc.jpg"
+        for tu in tool_uses
+    )
 
 
 @pytest.mark.unit
