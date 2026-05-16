@@ -32,7 +32,7 @@ Routes: `/canvas`, `/studio`, `/loops`, `/connectors`, `/brand`, `/agents`.
 ## Plan
 
 Full implementation plan with the 9-workstream graph (WS-0 through WS-H) lives at:
-`/Users/u1060059/.claude/plans/i-am-building-new-rustling-dongarra.md`
+`docs/plan.md`
 
 ## Layout
 
