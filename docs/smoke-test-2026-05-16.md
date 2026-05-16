@@ -4,9 +4,10 @@ End-to-end functional sweep of Creative Intelligence Engine while two other sess
 
 ## Headline
 
-- **Backend**: 69 / 69 tests pass (60 api + 9 agents = 5 orchestrator + 6 hermes_cli) · `pytest -q` ~17 s
+- **Backend**: 71 / 71 tests pass · `pytest -q` ~19 s
 - **Frontend**: TypeScript clean (0 errors) · 13 / 13 Playwright specs pass (~19 s)
-- **End-to-end campaign**: 26 SSE events in 7.6 s through Pioneer real fine-tune. All event taxonomy classes emitted (`run_start`, `started`, `thought`×2, `agent_step_*`×8, `artifact`×3, `node_*`×10, `done`).
+- **End-to-end campaign**: 26 SSE events in 7 s through the active 3-adapter chain (`pioneer → claude_code → openai`). All event taxonomy classes emitted.
+- **Live `claude_code` adapter**: returns real Anthropic completions ("Your feet called — they're filing a complaint about every other shoe you own.") at ~$0.32/run for the strategist node.
 - **Chat persistence (NEW)**: full CRUD round-trip works; SQLite at `fixtures/cie.db`.
 - **Adapter fallback**: silent failover verified live with real Hermes binary returning Bedrock errors.
 - **Models everywhere current**: OpenAI `gpt-5.4` / `gpt-5.4-mini`, Hermes-CLI → Bedrock `eu.anthropic.claude-opus-4-6-v1`, Claude CLI 2.1.143.
@@ -23,6 +24,7 @@ End-to-end functional sweep of Creative Intelligence Engine while two other sess
 | 0f | Web booted at :3000 | PASS | `/` → 307 → `/studio` |
 | 0g | `uv run pytest` (services/api) | PASS | 60/60 |
 | 0h | `uv run pytest` (services/agents) | PASS | 11/11 (5 orchestrator + 6 hermes_cli) |
+| 0g+h | combined backend pytest | PASS | **71/71** |
 | 0i | `pnpm --filter web type-check` | PASS | 0 errors |
 | 0j | `pnpm --filter web exec playwright test` | PASS | 13/13 |
 
@@ -32,7 +34,7 @@ End-to-end functional sweep of Creative Intelligence Engine while two other sess
 |---|---|---|---|
 | `pioneer` | Pioneer fine-tune (`api.pioneer.ai`, OpenAI-compatible) | `LLM_MARKETING_MODEL_ID` UUID from sponsor dashboard | **LIVE-VERIFIED** — HTTP 200 |
 | `openai` | OpenAI Python SDK | `gpt-5.4-mini` (default) / `gpt-5.4` (hero) | requires `OPENAI_API_KEY` |
-| `claude_code` | local `claude` CLI subprocess | whatever `claude` is authed for | **LIVE-VERIFIED** (CLI 2.1.143) |
+| `claude_code` | local `claude` CLI subprocess | whatever `claude` is authed for | **LIVE-VERIFIED** (CLI 2.1.143) — see "Claude Code adapter fixes" below |
 | `hermes_cli` | `hermes -z PROMPT` subprocess (NousResearch v0.14.0) | `eu.anthropic.claude-opus-4-6-v1` via Bedrock | **LIVE-VERIFIED** end-to-end |
 | `together` | Together AI / open-source models | `NousResearch/Hermes-4-70B` | requires `HERMES_API_KEY` |
 | `hermes` | DEPRECATED alias → `together` | — | works for one release |
@@ -45,6 +47,33 @@ ADAPTER_FALLBACK_CHAIN=pioneer,claude_code,hermes_cli,openai,together
 ```
 
 The frontend exposes 5 named pairings via `apps/web/lib/adapterPairings.ts` (pioneer-claude, claude-hermes, openai-hermes, pioneer-only, claude-only).
+
+## Claude Code adapter fixes (2026-05-16, post-install)
+
+Two regressions discovered while smoke-testing against Claude Code CLI 2.1.143
+and patched in `services/agents/adapters/claude_code.py`:
+
+1. **`--verbose` is now required** when combining `--print` with
+   `--output-format=stream-json`. Without it the CLI exits with
+   `"Error: When using --print, --output-format=stream-json requires --verbose"`.
+   The adapter now passes `--verbose` unconditionally.
+
+2. **`--verbose` mode emits long preamble lines** (full skill registry, tool
+   catalog, etc — easily >64 KB on the first JSONL line). Default
+   asyncio StreamReader limit (64 KB) raised `LimitOverrunError: "Separator is
+   found, but chunk is longer than limit"`. The adapter now creates the
+   subprocess with `limit=8 MiB` and uses `readuntil(b"\\n")` with defensive
+   draining for any oversized line.
+
+Live verification:
+```python
+adapter = claude_code
+prompt  = "Pitch a 1-line Reels hook for Allbirds wool runners. Output the hook only."
+result.text       = "Your feet called — they're filing a complaint about every other shoe you own."
+result.cost_usd   = 0.32
+result.usage      = {input_tokens: 6, output_tokens: 27}
+result.session_id = "cs_..."  (resumable via --resume)
+```
 
 ## Hermes-CLI live integration (NEW — completed this session)
 
@@ -145,9 +174,9 @@ Adapter 'pioneer' returned exit (0): provider=pioneer, model=8be3cde9-...
 
 **Result: the user never sees an adapter error.** The runtime always returns a clean response — either real text from a healthy adapter, or empty text with `meta.all_adapters_failed=True` that downstream nodes parse safely (covered by `test_strategist_falls_back_when_runtime_returns_garbage`).
 
-## End-to-end campaign trace (row #5)
+## End-to-end campaign trace — active 3-adapter chain
 
-Request:
+Request (the active production-default chain after the Together cleanup):
 ```http
 POST /api/agents/campaign
 {
@@ -155,7 +184,7 @@ POST /api/agents/campaign
   "brand_id":"allbirds",
   "format":"reel",
   "adapter":"pioneer",
-  "fallback":"pioneer,openai,claude_code"
+  "fallback":"pioneer,claude_code,openai"
 }
 ```
 
@@ -169,20 +198,20 @@ POST http://localhost:8100/api/publish/instagram HTTP/1.1 200
 POST http://localhost:8100/api/publish/meta      HTTP/1.1 200
 ```
 
-Event distribution (26 events):
+Event distribution (26 events, 7 s wall-clock):
 ```
-run_start          ×1
-started            ×1
-node_start         ×5
-node_complete      ×5
-thought            ×2  (strategist, creative_director)
-agent_step_start   ×4  (copywriter, art_director, analyst, publisher)
-agent_step_complete×4  (paired)
-artifact           ×3  (3 variants per shot)
-done               ×1
+run_start            ×1
+started              ×1
+node_start           ×5
+node_complete        ×5
+thought              ×2  (strategist, creative_director)
+agent_step_start     ×4  (copywriter, art_director, analyst, publisher)
+agent_step_complete  ×4  (paired)
+artifact             ×3  (3 variants per shot)
+done                 ×1
 ```
 
-Full taxonomy emitted, no errors, 7.6 s wall-clock.
+Full taxonomy emitted, no errors. Pioneer served the full pipeline; if it had failed, `claude_code` (just verified live in isolation) would have caught the load.
 
 ## What's wired but not yet integrated into Studio
 
@@ -205,6 +234,7 @@ Everything required by these is *backend-ready*: chat router mounted, DB persist
 | `services/agents/adapters/together.py` | 134 | Renamed from `hermes.py`; class `TogetherNotConfigured` (alias `HermesNotConfigured`) |
 | `services/agents/adapters/hermes_cli.py` | 269 | Subprocess to Hermes CLI v0.14.0 with error-pattern detection |
 | `services/agents/adapters/openai.py` | (mod) | Default models bumped to `gpt-5.4` / `gpt-5.4-mini` |
+| `services/agents/adapters/claude_code.py` | (mod) | Adds `--verbose` (required by CLI 2.1+) and bumps StreamReader limit to 8 MiB |
 | `services/agents/adapters/pioneer.py` | (mod) | Adds `X-API-Key` header alongside `Authorization: Bearer` |
 | `services/agents/registry.py` | (mod) | Registers `together`, `hermes_cli`; aliases `hermes`→`together` |
 | `services/agents/runtime.py` | (mod) | `_resolve_chain` reads override from `ctx.config["fallback_chain"]`; graceful all-failed result |
@@ -219,6 +249,20 @@ Everything required by these is *backend-ready*: chat router mounted, DB persist
 | `services/api/pyproject.toml` | (mod) | Adds `sqlmodel>=0.0.22` |
 | `.gitignore` | (mod) | Excludes `fixtures/cie.db*` |
 | `docs/smoke-test-2026-05-16.md` | this | Full sweep results |
+
+## Together AI / `together` adapter status
+
+Removed from `.env` to keep the active config clean. The `together` adapter is
+**still registered** and works if you re-add the keys:
+
+```bash
+HERMES_API_BASE=https://api.together.xyz/v1
+HERMES_API_KEY=tg_...
+HERMES_MODEL=NousResearch/Hermes-4-70B
+```
+
+Selectable per-request via `?adapter=together` (or the deprecated alias
+`?adapter=hermes`). Documented in `.env.example` for future contributors.
 
 ## Models pinned (latest as of 2026-05-16)
 

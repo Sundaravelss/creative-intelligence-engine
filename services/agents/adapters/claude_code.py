@@ -44,7 +44,18 @@ def _build_prompt(ctx: AdapterExecutionContext) -> str:
 
 
 def _build_args(prompt: str, ctx: AdapterExecutionContext) -> list[str]:
-    args = ["--print", "-p", prompt, "--output-format", "stream-json"]
+    # `--verbose` is REQUIRED when combining `--print` with
+    # `--output-format=stream-json` on Claude Code CLI ≥ 2.1. Without it the
+    # CLI exits with: "Error: When using --print, --output-format=stream-json
+    # requires --verbose".
+    args = [
+        "--print",
+        "-p",
+        prompt,
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ]
     session_id = ctx.runtime.session_id
     if session_id:
         args.extend(["--resume", session_id])
@@ -64,12 +75,20 @@ async def execute(ctx: AdapterExecutionContext) -> AdapterExecutionResult:
 
     await _emit(ctx, "stdout", f"[claude_code] spawn {cli} (args={len(args)})\n")
 
+    # Claude Code's `--verbose` mode emits long JSONL lines (system init events
+    # carry the full skill registry, tool catalog, etc — easily 200+ KB on the
+    # first line). asyncio's default StreamReader limit is 64 KB which causes
+    # `LimitOverrunError` ("Separator is found, but chunk is longer than
+    # limit"). Bump to 8 MB to comfortably handle the verbose preamble.
+    _STREAM_LIMIT = 8 * 1024 * 1024
+
     try:
         proc = await asyncio.create_subprocess_exec(
             cli,
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=_STREAM_LIMIT,
         )
     except FileNotFoundError as exc:
         raise ClaudeCodeNotConfigured(
@@ -84,7 +103,21 @@ async def execute(ctx: AdapterExecutionContext) -> AdapterExecutionResult:
     parse_errors = 0
 
     assert proc.stdout is not None  # for type-checker
-    async for raw in proc.stdout:
+    while True:
+        try:
+            raw = await proc.stdout.readuntil(b"\n")
+        except asyncio.IncompleteReadError as exc:
+            raw = exc.partial
+            if not raw:
+                break
+        except asyncio.LimitOverrunError:
+            # Defensive: skip a single oversized line rather than failing the
+            # whole adapter. Drain the bytes so the stream stays parseable.
+            await proc.stdout.read(_STREAM_LIMIT)
+            parse_errors += 1
+            continue
+        if not raw:
+            break
         line = raw.decode("utf-8", errors="replace").strip()
         if not line:
             continue
