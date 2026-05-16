@@ -189,7 +189,7 @@ export function ComposerFooter({
           disabled={disabled}
         />
         <div className="flex items-center gap-2">
-          <PlusMenu onSchedule={handleSchedule} onFiles={handleFiles} />
+          <PlusMenu onFiles={handleFiles} />
           <Button
             type="button"
             variant="ghost"

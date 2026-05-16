@@ -1,52 +1,38 @@
 "use client";
 
 import { type ChangeEvent, useCallback, useRef } from "react";
-import {
-  CalendarClock,
-  FileText,
-  Image as ImageIcon,
-  Plus,
-  Video,
-} from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface PlusMenuProps {
-  /** Optional callback when "Schedule loop" is selected. */
+  /** Optional callback when "Schedule loop" is selected. (Kept for API
+   * compatibility with callers that previously used the dropdown variant.) */
   onSchedule?: () => void;
-  /** Optional callback when files are picked from the OS file dialog. */
+  /** Callback when files are picked from the OS file dialog. */
   onFiles?: (files: File[]) => void;
+  /** Restrict the picker. Defaults to "image/*". */
+  accept?: string;
 }
 
-const ACCEPT_IMAGE = "image/*";
-const ACCEPT_VIDEO = "video/*";
-const ACCEPT_DOC =
-  ".pdf,.doc,.docx,.txt,.md,.csv,.xls,.xlsx,.ppt,.pptx,application/pdf";
-
-export function PlusMenu({ onSchedule, onFiles }: PlusMenuProps = {}) {
+/**
+ * The composer's "+" button. A single click opens the OS file picker
+ * directly — no dropdown menu, no Radix focus dance. This was a deliberate
+ * regression over the prior dropdown UX after multiple browser-specific bugs
+ * caused the picker to silently fail to open. If we want a multi-modal menu
+ * back later (Image / Video / Document / Schedule), bring it back as a
+ * SECONDARY affordance and keep the primary `+` click as a direct picker.
+ *
+ * Schedule-loop is currently exposed via a sibling button in the composer
+ * footer (calendar icon), so dropping it from `+` doesn't lose any feature.
+ */
+export function PlusMenu({ onFiles, accept = "image/*" }: PlusMenuProps = {}) {
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const acceptRef = useRef<string>("*/*");
 
-  const openPicker = useCallback((accept: string) => {
-    acceptRef.current = accept;
-    // Defer the click so Radix's DropdownMenu finishes closing before we
-    // synthesize the click on the hidden <input>. Without this, the menu's
-    // focus-restore handler intercepts the click and the OS file dialog
-    // never opens. See radix-ui/primitives#1241.
-    setTimeout(() => {
-      const el = inputRef.current;
-      if (!el) return;
-      el.accept = accept;
-      el.value = "";
-      el.click();
-    }, 0);
+  const openPicker = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.value = "";
+    el.click();
   }, []);
 
   const handleChange = useCallback(
@@ -64,61 +50,24 @@ export function PlusMenu({ onSchedule, onFiles }: PlusMenuProps = {}) {
       <input
         ref={inputRef}
         type="file"
+        accept={accept}
         multiple
         className="hidden"
         onChange={handleChange}
         aria-hidden
       />
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 rounded-full border border-black/10 bg-white/70 hover:bg-white"
-            aria-label="Add attachment"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-52">
-          <DropdownMenuLabel>Upload from your device</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onSelect={(e) => {
-              e.preventDefault();
-              openPicker(ACCEPT_IMAGE);
-            }}
-          >
-            <ImageIcon className="mr-2 h-4 w-4" /> Image
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onSelect={(e) => {
-              e.preventDefault();
-              openPicker(ACCEPT_VIDEO);
-            }}
-          >
-            <Video className="mr-2 h-4 w-4" /> Video
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onSelect={(e) => {
-              e.preventDefault();
-              openPicker(ACCEPT_DOC);
-            }}
-          >
-            <FileText className="mr-2 h-4 w-4" /> Document
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onSelect={(e) => {
-              e.preventDefault();
-              onSchedule?.();
-            }}
-          >
-            <CalendarClock className="mr-2 h-4 w-4" /> Schedule loop
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={openPicker}
+        className="h-8 w-8 rounded-full border border-black/10 bg-white/70 hover:bg-white"
+        aria-label="Attach an image"
+        title="Attach an image"
+        data-testid="cie-composer-attach"
+      >
+        <Plus className="h-4 w-4" />
+      </Button>
     </>
   );
 }
