@@ -29,8 +29,22 @@ export interface SuggestedFollowupItem {
   query: string;
 }
 
+export interface UserAttachment {
+  url: string;
+  filename: string;
+  contentType?: string;
+  /** Local blob URL for thumbnail rendering. May be revoked after submit. */
+  preview?: string;
+}
+
 export type ChatMessage =
-  | { kind: "user"; id: string; text: string; timestamp: string }
+  | {
+      kind: "user";
+      id: string;
+      text: string;
+      timestamp: string;
+      attachments?: UserAttachment[];
+    }
   | {
       kind: "reasoning";
       id: string;

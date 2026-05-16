@@ -264,7 +264,15 @@ function StudioPageInner() {
   );
 
   const handleSubmit = useCallback(
-    async (text: string) => {
+    async (
+      text: string,
+      attachments: Array<{
+        url: string;
+        filename: string;
+        contentType: string;
+        preview: string;
+      }> = [],
+    ) => {
       if (running) {
         toast.error("A run is already streaming. Wait for it to finish.");
         return;
@@ -286,6 +294,14 @@ function StudioPageInner() {
         id: uid("u"),
         text,
         timestamp: nowTs(),
+        attachments: attachments.length
+          ? attachments.map((a) => ({
+              url: a.url,
+              filename: a.filename,
+              contentType: a.contentType,
+              preview: a.preview,
+            }))
+          : undefined,
       };
 
       setThread((curr) => [...curr, userMsg]);
@@ -302,6 +318,11 @@ function StudioPageInner() {
             messages: [{ role: "user", content: text }],
             // agent_id omitted → backend defaults to "sage". /agents/[id] passes its own.
             adapter: adapter || "claude_code",
+            attachments: attachments.map((a) => ({
+              url: a.url,
+              filename: a.filename,
+              content_type: a.contentType,
+            })),
           }),
           signal: controller.signal,
         });

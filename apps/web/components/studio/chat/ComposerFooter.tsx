@@ -38,7 +38,12 @@ interface ChatAttachment {
 interface ComposerFooterProps {
   adapter: string;
   setAdapter: (id: string) => void;
-  onSubmit: (text: string) => void;
+  /**
+   * Submit handler. The caller decides how to thread `attachments` into
+   * the chat thread + the API payload. The composer never inlines them
+   * as text tags itself.
+   */
+  onSubmit: (text: string, attachments: ChatAttachment[]) => void;
   /** Open the schedule modal seeded with the current draft. */
   onSchedule?: (currentText: string) => void;
   disabled?: boolean;
@@ -113,16 +118,15 @@ export function ComposerFooter({
   function submit(e?: FormEvent) {
     e?.preventDefault();
     const value = text.trim();
-    if (!value || disabled) return;
-    // Inject `<attached_image url="..." />` blocks so Sage's persona can
-    // route to image-to-image with that reference.
-    const tags = attachments
-      .map((a) => `<attached_image url="${a.url}" />`)
-      .join("\n");
-    const composed = tags ? `${value}\n\n${tags}` : value;
-    onSubmit(composed);
-    // Clear local state.
-    attachments.forEach((a) => URL.revokeObjectURL(a.preview));
+    if (!value && attachments.length === 0) return;
+    if (disabled) return;
+    // Pass attachments as a structured field so the page can (a) render
+    // them as thumbnails in the user bubble and (b) include them as a
+    // proper `attachments` field on the chat-completions request.
+    onSubmit(value, attachments);
+    // Don't revoke the preview URLs here — the page may still be
+    // rendering the user bubble that references them. The thread item
+    // owns the lifecycle from this point.
     setAttachments([]);
     setText("");
   }

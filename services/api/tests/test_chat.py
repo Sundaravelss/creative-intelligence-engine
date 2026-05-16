@@ -363,6 +363,43 @@ def test_chat_completions_image_edit_passes_reference_url(
 
 
 @pytest.mark.unit
+def test_chat_completions_attachments_inject_reference_url_into_persona(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the request carries `attachments`, the persona's `instructions`
+    field gets a hard directive: 'include reference_url=... on your sentinel'.
+
+    This is the chain that fixes "I attached an image but Claude said it
+    couldn't see it" — without this, Claude treats the URL as text noise.
+    """
+    captured = _patch_runtime_with_text(monkeypatch, "ok")
+
+    resp = client.post(
+        "/api/chat/completions",
+        json={
+            "messages": [{"role": "user", "content": "make 3 variations"}],
+            "attachments": [
+                {
+                    "url": "https://fal.cdn/uploads/bag.jpg",
+                    "filename": "bag.jpg",
+                    "content_type": "image/jpeg",
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(captured) == 1
+    instructions = captured[0]["instructions"]
+    assert "REFERENCE IMAGE ATTACHED" in instructions
+    assert "https://fal.cdn/uploads/bag.jpg" in instructions
+    assert 'reference_url="https://fal.cdn/uploads/bag.jpg"' in instructions
+
+    # And the prompt also carries the <attached_image> block.
+    user_prompt = captured[0]["prompt"]
+    assert '<attached_image url="https://fal.cdn/uploads/bag.jpg"' in user_prompt
+
+
+@pytest.mark.unit
 def test_chat_completions_threads_persona_system_prompt(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

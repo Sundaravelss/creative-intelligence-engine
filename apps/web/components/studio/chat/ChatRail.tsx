@@ -12,7 +12,15 @@ interface ChatRailProps {
   modelLabel?: string;
   adapter: string;
   setAdapter: (id: string) => void;
-  onSubmit: (text: string) => void;
+  onSubmit: (
+    text: string,
+    attachments: Array<{
+      url: string;
+      filename: string;
+      contentType: string;
+      preview: string;
+    }>,
+  ) => void;
   onSchedule?: (currentText: string) => void;
   onChipFocus?: (chip: GenerationChipData) => void;
   onFollowup?: (item: SuggestedFollowupItem) => void;

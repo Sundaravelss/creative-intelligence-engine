@@ -292,11 +292,22 @@ class ChatMessageInput(BaseModel):
     content: str
 
 
+class ChatAttachmentInput(BaseModel):
+    url: str
+    filename: str | None = None
+    content_type: str | None = None
+
+
 class ChatCompletionsInput(BaseModel):
     messages: list[ChatMessageInput] = Field(default_factory=list)
     agent_id: str | None = None
     session_id: str | None = None
     adapter: str | None = None
+    # FAL-hosted reference images uploaded via POST /api/chat/upload. When
+    # present, the persona's system prompt is augmented with a directive to
+    # include `reference_url="..."` on its `<image .../>` sentinel so the
+    # backend routes through fal-ai/flux/dev/image-to-image.
+    attachments: list[ChatAttachmentInput] = Field(default_factory=list)
 
 
 # Sentinel-tag protocol: persona emits
@@ -445,6 +456,35 @@ async def _drive_chat_stream(
     # the campaign orchestrator at /api/agents/campaign still respects).
     # Caller can still override per-request via body.adapter.
     prompt = _build_user_prompt(body.messages)
+
+    # If the user attached one or more images via POST /api/chat/upload,
+    # weave the URLs into the prompt AND into the system instructions so
+    # Sage emits a sentinel with reference_url= rather than treating the
+    # tag as conversation noise. Claude can't fetch URLs — we have to be
+    # very explicit in the system prompt.
+    instructions = persona.system_prompt
+    if body.attachments:
+        attachment_lines = "\n".join(
+            f'<attached_image url="{a.url}" filename="{a.filename or ""}" />'
+            for a in body.attachments
+        )
+        prompt = f"{prompt.rstrip()}\n\n{attachment_lines}"
+        first_url = body.attachments[0].url
+        instructions = (
+            instructions
+            + "\n\n"
+            + "IMPORTANT — REFERENCE IMAGE ATTACHED\n"
+            + f"The user attached image(s). The first reference URL is:\n"
+            + f"  {first_url}\n"
+            + "When you emit your <image .../> sentinel for an image reply,\n"
+            + "you MUST include `reference_url=\"" + first_url + "\"` so the\n"
+            + "platform routes to image-to-image and produces three styled\n"
+            + "remixes of the user's actual photo (not from-scratch).\n"
+            + "Do NOT describe the image as if you can see it — you cannot.\n"
+            + "Just propose three creative treatments and emit the sentinel\n"
+            + "with the reference_url above.\n"
+        )
+
     config: dict[str, Any] = {"adapter": body.adapter or "claude_code"}
 
     runtime_state = RuntimeState(session_id=body.session_id)
@@ -467,7 +507,7 @@ async def _drive_chat_stream(
             id=persona.id,
             name=persona.name,
             role=persona.role,
-            instructions=persona.system_prompt,
+            instructions=instructions,
             adapter_type=body.adapter or "claude_code",
         ),
         runtime=runtime_state,

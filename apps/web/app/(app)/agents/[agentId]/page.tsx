@@ -84,7 +84,15 @@ export default function AgentChatPage() {
   const abortRef = useRef<AbortController | null>(null);
 
   const handleSubmit = useCallback(
-    async (text: string) => {
+    async (
+      text: string,
+      attachments: Array<{
+        url: string;
+        filename: string;
+        contentType: string;
+        preview: string;
+      }> = [],
+    ) => {
       if (running) {
         toast.error("A reply is still streaming. Wait for it to finish.");
         return;
@@ -98,6 +106,14 @@ export default function AgentChatPage() {
         id: uid("u"),
         text,
         timestamp: nowTs(),
+        attachments: attachments.length
+          ? attachments.map((a) => ({
+              url: a.url,
+              filename: a.filename,
+              contentType: a.contentType,
+              preview: a.preview,
+            }))
+          : undefined,
       };
       setThread((curr) => [...curr, userMsg]);
       setRunning(true);
@@ -110,6 +126,11 @@ export default function AgentChatPage() {
             messages: [{ role: "user", content: text }],
             agent_id: agentId,
             adapter,
+            attachments: attachments.map((a) => ({
+              url: a.url,
+              filename: a.filename,
+              content_type: a.contentType,
+            })),
           }),
           signal: controller.signal,
         });

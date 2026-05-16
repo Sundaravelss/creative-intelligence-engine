@@ -51,6 +51,7 @@ export function ThreadMessageList({
                   key={msg.id}
                   text={msg.text}
                   timestamp={msg.timestamp}
+                  attachments={msg.attachments}
                 />
               );
             case "started":
