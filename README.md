@@ -2,7 +2,6 @@
 
 Unified **agentic Marketing OS** for TechEurope Paris hackathon: ad-performance ingestion → top-performer analysis → multi-modal creative generation → publishing — built around a **node-based canvas + agent layer + recurring routines + connectors hub**.
 
-Merges the agentic shell of [shopos.ai](https://shopos.ai) (Spaces / Loops / Cowork / Brand Memory) with the generation surface of [higgsfield.ai/canvas](https://higgsfield.ai/canvas) (Marketing Studio, DTC Ads, Virality Predictor, Sora 2 presets, 30+ models).
 
 ## Stack
 
