@@ -14,6 +14,7 @@ import { Loader2, Trash2, UploadCloud } from "lucide-react";
 import { toast } from "sonner";
 
 import { FormatPicker, type StudioFormat } from "@/components/studio/FormatPicker";
+import { useBrand } from "@/lib/brand";
 
 /**
  * Serializable subset of `SpaceTemplate` — the parent server component
@@ -86,7 +87,12 @@ export function SpaceSteps({ space }: SpaceStepsProps) {
   // Step 2 state
   const [prompt, setPrompt] = useState<string>(space.defaultPrompt);
   const [format, setFormat] = useState<StudioFormat>("square");
-  const [brandId, setBrandId] = useState<string>("allbirds");
+  const { brandId: defaultBrandId } = useBrand();
+  const [brandId, setBrandId] = useState<string>(defaultBrandId);
+  // Sync the local override with the live brand once it loads from /api/brand.
+  useEffect(() => {
+    setBrandId(defaultBrandId);
+  }, [defaultBrandId]);
   const [launching, setLaunching] = useState(false);
 
   // Cleanup blob URLs on unmount.

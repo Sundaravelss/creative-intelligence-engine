@@ -44,8 +44,11 @@ def _resolve_model(ctx: AdapterExecutionContext) -> str:
     if ctx.config.get("model"):
         return str(ctx.config["model"])
     if ctx.config.get("hero", False):
-        return os.environ.get("OPENAI_MODEL_HERO", "gpt-4o").strip() or "gpt-4o"
-    return os.environ.get("OPENAI_MODEL_DEFAULT", "gpt-4o-mini").strip() or "gpt-4o-mini"
+        return os.environ.get("OPENAI_MODEL_HERO", "gpt-5.4").strip() or "gpt-5.4"
+    return (
+        os.environ.get("OPENAI_MODEL_DEFAULT", "gpt-5.4-mini").strip()
+        or "gpt-5.4-mini"
+    )
 
 
 async def execute(ctx: AdapterExecutionContext) -> AdapterExecutionResult:

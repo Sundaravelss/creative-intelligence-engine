@@ -15,12 +15,15 @@ from .contract import AdapterExecutionContext, AdapterExecutionResult
 
 logger = logging.getLogger(__name__)
 
+# Active 3-adapter chain: Pioneer (sponsor) → local Claude CLI → OpenAI.
+# Hermes-CLI and Together are still registered and selectable per-request via
+# `?adapter=hermes_cli` or `ADAPTER_FALLBACK_CHAIN`, just not in the default
+# chain — Hermes-CLI's Bedrock provider needs the Anthropic use-case form
+# approved on the personal AWS account first.
 _DEFAULT_FALLBACK_CHAIN: tuple[str, ...] = (
     "pioneer",
-    "openai",
     "claude_code",
-    "hermes_cli",
-    "together",
+    "openai",
 )
 
 

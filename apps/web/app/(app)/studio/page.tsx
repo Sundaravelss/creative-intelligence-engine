@@ -22,6 +22,7 @@ import { SpacesHintCard } from "@/components/studio/SpacesHintCard";
 import type { StudioFormat } from "@/components/studio/FormatPicker";
 import { ScheduleModal } from "@/components/loops/ScheduleModal";
 import { api } from "@/lib/api";
+import { useBrand } from "@/lib/brand";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
@@ -138,6 +139,10 @@ function StudioPageInner() {
   const [scheduleSeed, setScheduleSeed] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const chipTimers = useRef<Map<string, number>>(new Map());
+
+  const { brandId } = useBrand();
+  const brandIdRef = useRef(brandId);
+  brandIdRef.current = brandId;
 
   // Suppress "unused setter" lint — format may be set by future composer affordances.
   void _setFormat;
@@ -272,7 +277,7 @@ function StudioPageInner() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               brief: { keyword: text },
-              brand_id: "allbirds",
+              brand_id: brandIdRef.current,
               format,
               variants_per_shot: 3,
             }),

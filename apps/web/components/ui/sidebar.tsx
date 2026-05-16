@@ -22,7 +22,6 @@ import {
   Sparkles,
   Workflow,
   LayoutGrid,
-  Repeat,
   Brain,
   Plug,
   Users,
@@ -95,7 +94,8 @@ const PRIMARY_NAV: NavItem[] = [
   { href: "/studio", label: "Studio", icon: Sparkles },
   { href: "/canvas", label: "Canvas", icon: Workflow },
   { href: "/spaces", label: "Spaces", icon: LayoutGrid },
-  { href: "/loops", label: "Loops", icon: Repeat, badge: "BETA" },
+  // Loops are now scheduled inline from the studio + canvas composers
+  // (see ScheduleModal). The /loops route + page were removed.
 ];
 
 const SECONDARY_NAV: NavItem[] = [

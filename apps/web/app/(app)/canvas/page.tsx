@@ -25,6 +25,7 @@ import {
   type StoryboardShot,
   type StoryboardShotKind,
 } from "@/lib/canvas/types";
+import { useBrand } from "@/lib/brand";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
@@ -151,6 +152,8 @@ function CanvasPageInner() {
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleSeed, setScheduleSeed] = useState("");
 
+  const { brandId } = useBrand();
+
   // Hydrate persisted pins/characters once.
   useEffect(() => {
     let cancelled = false;
@@ -264,7 +267,7 @@ function CanvasPageInner() {
               moodboardPins: pins.map((p) => p.url),
               presetIds: activePresetIds,
             },
-            brand_id: "allbirds",
+            brand_id: brandId,
             format: mode === "marketing" ? "reel" : "story",
             variants_per_shot: 3,
           }),
@@ -343,7 +346,7 @@ function CanvasPageInner() {
         setRunning(false);
       }
     },
-    [activePresetIds, lockedCharacter, pins, running],
+    [activePresetIds, brandId, lockedCharacter, pins, running],
   );
 
   const handleBriefSubmit = useCallback(

@@ -17,6 +17,10 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 type Phase = "fetching" | "parsing" | "extracting" | "complete";
+// `brand_md_refined` is emitted AFTER the heuristic `complete` event when the
+// LLM polish lands. The first cut just logs it; future PRs can swap the
+// displayed brand.md when this arrives.
+type RefinedPhase = "brand_md_refined";
 
 const PHASE_LABEL: Record<Phase, string> = {
   fetching: "Fetching",
@@ -63,7 +67,7 @@ export function ScanProgress({
   url,
   onComplete,
   onError,
-  timeoutMs = 30_000,
+  timeoutMs = 20_000,
 }: ScanProgressProps) {
   const [active, setActive] = useState<Phase>("fetching");
   const [done, setDone] = useState<Set<Phase>>(new Set());
@@ -136,11 +140,23 @@ export function ScanProgress({
             try {
               const ev = JSON.parse(json) as
                 | { type: "phase"; phase: Phase; profile?: BrandProfileLite }
+                | {
+                    type: "phase";
+                    phase: RefinedPhase;
+                    profile?: BrandProfileLite;
+                    brandMd?: string;
+                  }
                 | { type: "error"; code: string };
               if (ev.type === "error") {
                 throw new Error(ev.code || "scan_error");
               }
               if (ev.type === "phase") {
+                if (ev.phase === "brand_md_refined") {
+                  // LLM polish landed after the user already advanced past
+                  // ScanProgress. The refined markdown is already persisted
+                  // server-side; nothing to do in this component.
+                  continue;
+                }
                 if (ev.phase !== "complete") {
                   setActive(ev.phase);
                   // mark all phases up to (but not including) this one as done

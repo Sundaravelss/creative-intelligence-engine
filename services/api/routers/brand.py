@@ -189,6 +189,39 @@ async def get_brand_md() -> str:
 # stream never feels frozen.
 _TAVILY_TIMEOUT_S: Final[float] = 45.0
 _HTTPX_TIMEOUT_S: Final[float] = 20.0
+
+# In-memory scan cache. Keyed by normalized URL (lower, no trailing slash).
+# Stores (timestamp, recorded_events) so subsequent scans of the same site
+# replay instantly without re-hitting Tavily/LLM. 24h TTL is plenty for the
+# hackathon scope; survives server uptime, evicts on lookup.
+_SCAN_CACHE_TTL_S: Final[float] = 24 * 60 * 60.0
+_SCAN_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+def _scan_cache_key(url: str) -> str:
+    return url.strip().lower().rstrip("/")
+
+
+def _scan_cache_get(url: str) -> list[dict[str, Any]] | None:
+    """Return cached events for `url` if fresh, else None (and evict)."""
+    import time
+
+    key = _scan_cache_key(url)
+    entry = _SCAN_CACHE.get(key)
+    if entry is None:
+        return None
+    ts, events = entry
+    if time.time() - ts > _SCAN_CACHE_TTL_S:
+        _SCAN_CACHE.pop(key, None)
+        return None
+    return events
+
+
+def _scan_cache_put(url: str, events: list[dict[str, Any]]) -> None:
+    """Store events under the normalized URL key; only call on full success."""
+    import time
+
+    _SCAN_CACHE[_scan_cache_key(url)] = (time.time(), events)
 _HEX_RE: Final[re.Pattern[str]] = re.compile(r"#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b")
 _LOGO_HINT_RE: Final[re.Pattern[str]] = re.compile(r"logo|brand|header", re.IGNORECASE)
 _PRODUCT_PATH_RE: Final[re.Pattern[str]] = re.compile(r"/products?/", re.IGNORECASE)
@@ -770,7 +803,45 @@ def _build_tavily_client() -> Any | None:
 
 
 async def _scan_stream(url: str) -> AsyncIterator[dict[str, Any]]:
-    """Yield SSE events: phase=fetching → parsing → extracting → complete."""
+    """Yield SSE events for a brand scan.
+
+    Wraps `_scan_stream_uncached` with a 24h URL-keyed cache so repeat scans
+    of the same site replay instantly. The cached path still emits the same
+    phase events (with a tiny `meta.cached=true` flag) so the UI's progress
+    animation stays continuous. We only cache fully-successful runs — error
+    or fetch-failed paths never seed the cache.
+    """
+    cached = _scan_cache_get(url)
+    if cached is not None:
+        for ev in cached:
+            # Decorate phase events so observers (and tests) can detect the
+            # replay path; payload contents are otherwise identical.
+            if ev.get("type") == "phase":
+                meta = dict(ev.get("meta") or {})
+                meta["cached"] = True
+                ev = {**ev, "meta": meta}
+            yield ev
+        return
+
+    recorded: list[dict[str, Any]] = []
+    success = False
+    try:
+        async for ev in _scan_stream_uncached(url):
+            recorded.append(ev)
+            yield ev
+            if ev.get("type") == "error":
+                success = False
+            elif ev.get("type") == "phase" and ev.get("phase") in {"complete", "brand_md_refined"}:
+                # Reaching `complete` means the heuristic profile is ready and
+                # was persisted; safe to cache. `brand_md_refined` overwrites.
+                success = True
+    finally:
+        if success:
+            _scan_cache_put(url, recorded)
+
+
+async def _scan_stream_uncached(url: str) -> AsyncIterator[dict[str, Any]]:
+    """Yield SSE events: phase=fetching → parsing → extracting → complete → brand_md_refined."""
     url = _normalize_url(url)
     client = _build_tavily_client()
 
@@ -778,22 +849,30 @@ async def _scan_stream(url: str) -> AsyncIterator[dict[str, Any]]:
     prose_blobs: list[str] = []
     used_fallback = False
 
+    catalog: dict[str, Any] | None = None
     if client is not None:
         try:
             yield {"type": "phase", "phase": "fetching", "url": url}
-            extract = await asyncio.wait_for(
+            domain = urlparse(url).netloc
+
+            # Run extract + search concurrently. Both are independent Tavily
+            # calls; awaiting them sequentially used to dominate wall time
+            # (up to 2 × _TAVILY_TIMEOUT_S in the worst case). asyncio.gather
+            # collapses them to a single timeout window.
+            extract_task = asyncio.wait_for(
                 asyncio.to_thread(
                     client.extract,
                     urls=[url],
                     include_images=True,
-                    extract_depth="advanced",
+                    # extract_depth="basic" is intentional: 5–12s typical vs
+                    # 30–45s for "advanced". Homepage HTML + image list is
+                    # enough for palette / voice / logo synthesis; the
+                    # catalog comes from the parallel Tavily.search call.
+                    extract_depth="basic",
                 ),
                 timeout=_TAVILY_TIMEOUT_S,
             )
-
-            yield {"type": "phase", "phase": "parsing"}
-            domain = urlparse(url).netloc
-            catalog = await asyncio.wait_for(
+            search_task = asyncio.wait_for(
                 asyncio.to_thread(
                     client.search,
                     query=f"site:{domain} products",
@@ -802,6 +881,10 @@ async def _scan_stream(url: str) -> AsyncIterator[dict[str, Any]]:
                 ),
                 timeout=_TAVILY_TIMEOUT_S,
             )
+
+            extract, catalog = await asyncio.gather(extract_task, search_task)
+
+            yield {"type": "phase", "phase": "parsing"}
 
             yield {"type": "phase", "phase": "extracting"}
             profile, prose_blobs = _synthesize_profile_from_tavily(url, extract, catalog)
@@ -841,90 +924,120 @@ async def _scan_stream(url: str) -> AsyncIterator[dict[str, Any]]:
         if len(cleaned) > len(longest):
             longest = cleaned
 
-    # Single LLM synthesis pass — enriches the seed profile with name/tagline/
-    # palette/voice/products AND returns a complete brand.md. Trusts the
-    # agents runtime's adapter fallback chain (pioneer → openai → claude_code →
-    # hermes). Only runs on the Tavily path; the httpx-fallback path stays
-    # heuristic-only so it remains test-safe and offline-safe.
-    enriched: dict[str, Any] | None = None
-    brand_md_llm: str | None = None
-    llm_voice_fallback = used_fallback  # fallback path: voice is heuristic-only
+    # ── Step A: Ship the heuristic profile + brand.md immediately ─────────
+    # Goal: get the user to BrandConfirmCard within ~10s on the cold path.
+    # The LLM pass below polishes brand.md in the background and emits a
+    # follow-up `brand_md_refined` event; if the UI has already advanced,
+    # the refined markdown still lands in fixtures/brand.md for the next
+    # page load.
 
-    if longest and not used_fallback:
-        catalog_titles: list[str] = []
-        if "catalog" in locals() and isinstance(catalog, dict):
-            catalog_titles = [
-                str(item.get("title") or "")
-                for item in (catalog.get("results") or [])
-                if isinstance(item, dict) and item.get("title")
-            ][:12]
-        seed_images: list[str] = []
-        if profile.get("logoUrl"):
-            seed_images.append(str(profile["logoUrl"]))
+    heuristic_brand_md = _brand_md_from_profile(profile)
 
-        enriched, brand_md_llm = await _llm_synthesize_brand(
-            url=url,
-            homepage_prose=longest,
-            catalog_titles=catalog_titles,
-            images=seed_images,
-        )
-
-        if enriched:
-            for key in ("name", "tagline", "voice", "logoUrl"):
-                value = enriched.get(key)
-                if value:
-                    profile[key] = value
-            llm_palette = enriched.get("palette")
-            if isinstance(llm_palette, list) and llm_palette:
-                profile["palette"] = [str(c) for c in llm_palette[:6]]
-            llm_products = enriched.get("products")
-            if isinstance(llm_products, list) and llm_products:
-                profile["products"] = [
-                    {"name": str(p.get("name", "")), "sku": str(p.get("sku", ""))}
-                    for p in llm_products
-                    if isinstance(p, dict) and p.get("name")
-                ][:8]
-        else:
-            # Enrichment didn't run — try the dedicated voice helper as a final
-            # rescue. Same Tavily-path constraint applies (skipped on fallback).
-            voice, voice_only_fallback = await _synthesize_voice(longest[:6000])
-            if voice:
-                profile["voice"] = voice
-            llm_voice_fallback = voice_only_fallback
-
-    if not profile.get("voice"):
-        profile["voice"] = ""
-        llm_voice_fallback = True
-
-    voice_fallback = llm_voice_fallback
-
-    # Brand.md: prefer the LLM's markdown, fall back to a heuristic build.
-    brand_md_text = (brand_md_llm or "").strip() or _brand_md_from_profile(profile)
-
-    # Persist both files atomically.
+    # Persist heuristic snapshot atomically. brand.md is non-load-bearing if
+    # writes fail; the JSON profile is the source of truth.
     try:
         _atomic_write_json(_BRAND_FILE, profile)
-        logger.info("Wrote scanned brand profile to %s", _BRAND_FILE)
+        logger.info("Wrote heuristic brand profile to %s", _BRAND_FILE)
     except OSError as exc:
         logger.error("Failed to persist scanned brand profile: %s", exc)
         yield {"type": "error", "code": "persist_failed", "url": url}
         return
 
     try:
-        _atomic_write_text(_BRAND_MD, brand_md_text)
-        logger.info("Wrote brand.md (%d bytes) to %s", len(brand_md_text), _BRAND_MD)
+        _atomic_write_text(_BRAND_MD, heuristic_brand_md)
+        logger.info(
+            "Wrote heuristic brand.md (%d bytes) to %s",
+            len(heuristic_brand_md),
+            _BRAND_MD,
+        )
     except OSError as exc:
-        # brand.md is non-load-bearing for the demo; warn and continue.
-        logger.warning("Failed to persist brand.md: %s", exc)
+        logger.warning("Failed to persist heuristic brand.md: %s", exc)
 
-    complete: dict[str, Any] = {
+    complete_event: dict[str, Any] = {
         "type": "phase",
         "phase": "complete",
         "profile": profile,
+        "meta": {"heuristic": True} if (longest and not used_fallback) else {},
     }
-    if voice_fallback:
-        complete["meta"] = {"voice_fallback": True}
-    yield complete
+    yield complete_event
+
+    # ── Step B: Background LLM polish — only when Tavily prose is available ─
+    # On httpx-fallback we stop here (kept test-safe and offline-safe per the
+    # original comment).
+    if not (longest and not used_fallback):
+        return
+
+    catalog_titles: list[str] = []
+    if isinstance(catalog, dict):
+        catalog_titles = [
+            str(item.get("title") or "")
+            for item in (catalog.get("results") or [])
+            if isinstance(item, dict) and item.get("title")
+        ][:12]
+    seed_images: list[str] = []
+    if profile.get("logoUrl"):
+        seed_images.append(str(profile["logoUrl"]))
+
+    try:
+        enriched, brand_md_llm = await _llm_synthesize_brand(
+            url=url,
+            homepage_prose=longest,
+            catalog_titles=catalog_titles,
+            images=seed_images,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("LLM brand synthesis failed: %s", exc)
+        enriched, brand_md_llm = None, None
+
+    if enriched:
+        for key in ("name", "tagline", "voice", "logoUrl"):
+            value = enriched.get(key)
+            if value:
+                profile[key] = value
+        llm_palette = enriched.get("palette")
+        if isinstance(llm_palette, list) and llm_palette:
+            profile["palette"] = [str(c) for c in llm_palette[:6]]
+        llm_products = enriched.get("products")
+        if isinstance(llm_products, list) and llm_products:
+            profile["products"] = [
+                {"name": str(p.get("name", "")), "sku": str(p.get("sku", ""))}
+                for p in llm_products
+                if isinstance(p, dict) and p.get("name")
+            ][:8]
+    elif not profile.get("voice"):
+        # Enrichment didn't run — try the dedicated voice helper as a final
+        # rescue so the confirm card has a non-empty voice paragraph.
+        try:
+            voice, _ = await _synthesize_voice(longest[:6000])
+            if voice:
+                profile["voice"] = voice
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Voice rescue failed: %s", exc)
+
+    refined_brand_md = (brand_md_llm or "").strip() or _brand_md_from_profile(profile)
+
+    # Re-persist with the polished output.
+    try:
+        _atomic_write_json(_BRAND_FILE, profile)
+    except OSError as exc:
+        logger.warning("Failed to persist refined brand profile: %s", exc)
+
+    try:
+        _atomic_write_text(_BRAND_MD, refined_brand_md)
+        logger.info(
+            "Refined brand.md (%d bytes) written to %s",
+            len(refined_brand_md),
+            _BRAND_MD,
+        )
+    except OSError as exc:
+        logger.warning("Failed to persist refined brand.md: %s", exc)
+
+    yield {
+        "type": "phase",
+        "phase": "brand_md_refined",
+        "profile": profile,
+        "brandMd": refined_brand_md,
+    }
 
 
 @router.post("/scan")

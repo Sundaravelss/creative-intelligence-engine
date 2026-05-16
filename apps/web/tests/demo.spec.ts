@@ -12,20 +12,15 @@ import { expect, test } from "@playwright/test";
  */
 
 test.describe("Studio surface (WS-V1 chat + canvas)", () => {
-  test("renders empty-state hero and chat composer", async ({ page }) => {
+  test("renders empty-state hero and Schedule affordance", async ({ page }) => {
     await page.goto("/studio");
 
-    // Project header on left rail
-    await expect(
-      page.getByRole("button", { name: /Marketing Image Generation for Bags/i }),
-    ).toBeVisible();
-
-    // New Hello-name hero copy (W2)
+    // Hero copy
     await expect(
       page.getByText(/What are we going to sell today\?/i),
     ).toBeVisible();
 
-    // New Hello composer
+    // Hero composer + textarea
     const composer = page.getByTestId("cie-hello-composer");
     await expect(composer).toBeVisible();
     await expect(composer.locator("textarea")).toBeVisible();
@@ -37,17 +32,32 @@ test.describe("Studio surface (WS-V1 chat + canvas)", () => {
     // Spaces hint card
     await expect(page.getByTestId("cie-spaces-hint")).toBeVisible();
 
-    // Bottom composer "Add a follow-up…" textarea (always present)
+    // Schedule loop affordance — clock icon button on the empty-state composer.
     await expect(
-      page.getByPlaceholder(/Add a follow-up/i).first(),
+      page.getByRole("button", { name: /Schedule loop/i }).first(),
     ).toBeVisible();
   });
 
-  test("Live status pill and Opus 4.7 badge render in chat header", async ({
+  test("Schedule modal opens with prompt seeded from the hero composer", async ({
     page,
   }) => {
     await page.goto("/studio");
-    await expect(page.getByText("Opus 4.7")).toBeVisible();
+
+    const composer = page.getByTestId("cie-hello-composer");
+    await composer.locator("textarea").fill("daily promo for new sneakers");
+
+    await page.getByRole("button", { name: /Schedule loop/i }).first().click();
+
+    // Modal renders with the prompt prefilled and a Save schedule CTA.
+    const dialog = page.getByRole("dialog", { name: /Schedule loop/i });
+    await expect(dialog).toBeVisible();
+    await expect(
+      dialog.getByRole("button", { name: /Save schedule/i }),
+    ).toBeVisible();
+    // The dialog's Prompt textarea is seeded from the composer.
+    await expect(dialog.getByRole("textbox", { name: /Prompt/i })).toHaveValue(
+      "daily promo for new sneakers",
+    );
   });
 });
 

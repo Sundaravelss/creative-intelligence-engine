@@ -47,6 +47,19 @@ def client() -> TestClient:
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _reset_scan_cache() -> Any:
+    """Brand scan cache must not leak between tests.
+
+    Each test exercises the full scan flow against `https://example.com`; if
+    the cache survived between tests, later tests would replay stale events
+    instead of re-running their mocks.
+    """
+    brand_router._SCAN_CACHE.clear()
+    yield
+    brand_router._SCAN_CACHE.clear()
+
+
 @pytest.fixture()
 def preserve_brand_fixture() -> Any:
     """Snapshot fixtures/brand.json before the test, restore after.
@@ -157,23 +170,29 @@ def test_scan_happy_path(
     assert resp.status_code == 200, resp.text
     events = _parse_sse_events(resp.text)
     phases = [e.get("phase") for e in events if e.get("type") == "phase"]
-    assert phases == ["fetching", "parsing", "extracting", "complete"]
+    # Tavily-path scans emit `brand_md_refined` after `complete` when LLM
+    # polishes the heuristic profile in the background.
+    assert phases == ["fetching", "parsing", "extracting", "complete", "brand_md_refined"]
 
-    complete = events[-1]
-    assert complete["phase"] == "complete"
-    profile = complete["profile"]
-    assert profile["name"] == "Example"
-    assert profile["sourceUrl"] == "https://example.com"
-    assert profile["voice"].startswith("Calm")
-    assert profile["tagline"] == "Comfortable shoes for everyone."
-    assert profile["lastScannedAt"]
-    # Palette extracted from inline CSS hex literals.
-    assert "#216a51" in profile["palette"] or "#212121" in profile["palette"]
-    # Products picked from /products/ catalog hits, slug = URL tail.
-    product_ids = {p["id"] for p in profile["products"]}
+    complete = next(e for e in events if e.get("phase") == "complete")
+    refined = events[-1]
+    assert refined["phase"] == "brand_md_refined"
+
+    # `complete` ships the heuristic profile so the user advances fast.
+    heuristic = complete["profile"]
+    assert heuristic["name"] == "Example"
+    assert heuristic["sourceUrl"] == "https://example.com"
+    assert heuristic["tagline"] == "Comfortable shoes for everyone."
+    assert heuristic["lastScannedAt"]
+    assert "#216a51" in heuristic["palette"] or "#212121" in heuristic["palette"]
+    product_ids = {p["id"] for p in heuristic["products"]}
     assert {"wool-runners", "tree-runners", "tree-dasher"}.issubset(product_ids)
-    # No voice fallback when LLM succeeds.
-    assert "meta" not in complete or not complete.get("meta", {}).get("voice_fallback")
+
+    # `brand_md_refined` carries the LLM-enriched profile (here: voice from
+    # the rescue helper since `_llm_synthesize_brand` was stubbed to None).
+    polished = refined["profile"]
+    assert polished["voice"].startswith("Calm")
+    assert refined.get("brandMd")
 
 
 @pytest.mark.unit
@@ -245,13 +264,14 @@ def test_scan_falls_back_to_httpx_when_tavily_missing(
     assert resp.status_code == 200, resp.text
     events = _parse_sse_events(resp.text)
     phases = [e.get("phase") for e in events if e.get("type") == "phase"]
+    # httpx-fallback path stops at `complete` (no LLM polish — kept offline-safe).
     assert phases == ["fetching", "parsing", "extracting", "complete"]
 
     complete = events[-1]
     assert complete["phase"] == "complete"
-    assert complete.get("meta", {}).get("voice_fallback") is True
     profile = complete["profile"]
-    assert profile["voice"] == ""
+    # On fallback, voice is heuristic-only (empty unless extracted from HTML).
+    assert profile.get("voice", "") == ""
     assert profile["sourceUrl"] == "https://example.com"
     # Products extracted via regex from raw HTML.
     product_ids = {p["id"] for p in profile["products"]}
@@ -313,9 +333,99 @@ def test_scan_voice_llm_failure_still_completes(
     assert resp.status_code == 200, resp.text
     events = _parse_sse_events(resp.text)
     phases = [e.get("phase") for e in events if e.get("type") == "phase"]
-    assert phases == ["fetching", "parsing", "extracting", "complete"]
+    # On Tavily path the LLM polish still emits `brand_md_refined` even when
+    # both LLM helpers fail (refined event reflects the heuristic profile).
+    assert phases == ["fetching", "parsing", "extracting", "complete", "brand_md_refined"]
 
-    complete = events[-1]
-    assert complete["phase"] == "complete"
-    assert complete.get("meta", {}).get("voice_fallback") is True
-    assert complete["profile"]["voice"] == ""
+    complete = next(e for e in events if e.get("phase") == "complete")
+    assert complete["profile"].get("voice", "") == ""
+    refined = events[-1]
+    assert refined["phase"] == "brand_md_refined"
+    assert refined["profile"].get("voice", "") == ""
+
+
+@pytest.mark.unit
+def test_scan_cache_replays_fast(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    preserve_brand_fixture: None,
+) -> None:
+    """A second scan of the same URL replays from cache without invoking Tavily again."""
+    monkeypatch.setenv("TAVILY_API_KEY", "fake-test-key")
+
+    fake_client = MagicMock()
+    fake_client.extract.return_value = _fake_tavily_extract()
+    fake_client.search.return_value = _fake_tavily_catalog()
+
+    async def fake_voice(prose: str) -> tuple[str, bool]:
+        return ("Calm voice.", False)
+
+    async def fake_synth(**_kwargs: Any) -> tuple[None, None]:
+        return (None, None)
+
+    with patch.object(brand_router, "_build_tavily_client", return_value=fake_client), patch.object(
+        brand_router, "_synthesize_voice", side_effect=fake_voice
+    ), patch.object(brand_router, "_llm_synthesize_brand", side_effect=fake_synth):
+        first = client.post("/api/brand/scan", json={"url": "https://example.com"})
+        assert first.status_code == 200
+        assert fake_client.extract.call_count == 1
+        assert fake_client.search.call_count == 1
+
+        # Second scan against the same URL — cache MUST replay; no new
+        # upstream calls.
+        second = client.post("/api/brand/scan", json={"url": "https://example.com"})
+        assert second.status_code == 200
+        assert fake_client.extract.call_count == 1
+        assert fake_client.search.call_count == 1
+
+    events = _parse_sse_events(second.text)
+    phases = [e.get("phase") for e in events if e.get("type") == "phase"]
+    assert phases == ["fetching", "parsing", "extracting", "complete", "brand_md_refined"]
+    # Cached events carry meta.cached=True so observers can detect replay.
+    assert all(e.get("meta", {}).get("cached") is True for e in events if e.get("type") == "phase")
+
+
+@pytest.mark.unit
+def test_scan_runs_tavily_calls_in_parallel(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    preserve_brand_fixture: None,
+) -> None:
+    """Extract + search are gathered, so total wall time ≈ max() not sum()."""
+    import time
+
+    monkeypatch.setenv("TAVILY_API_KEY", "fake-test-key")
+
+    SLEEP_S = 0.6  # each call sleeps this long; sequential = 1.2s, parallel ≈ 0.6s
+
+    fake_client = MagicMock()
+
+    def slow_extract(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        time.sleep(SLEEP_S)
+        return _fake_tavily_extract()
+
+    def slow_search(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        time.sleep(SLEEP_S)
+        return _fake_tavily_catalog()
+
+    fake_client.extract.side_effect = slow_extract
+    fake_client.search.side_effect = slow_search
+
+    async def fake_voice(prose: str) -> tuple[str, bool]:
+        return ("", True)
+
+    async def fake_synth(**_kwargs: Any) -> tuple[None, None]:
+        return (None, None)
+
+    with patch.object(brand_router, "_build_tavily_client", return_value=fake_client), patch.object(
+        brand_router, "_synthesize_voice", side_effect=fake_voice
+    ), patch.object(brand_router, "_llm_synthesize_brand", side_effect=fake_synth):
+        t0 = time.time()
+        resp = client.post("/api/brand/scan", json={"url": "https://example.com"})
+        elapsed = time.time() - t0
+
+    assert resp.status_code == 200
+    # Parallel: ≤ ~1.5 × single call. Sequential would be ≥ 2 × single call.
+    assert elapsed < 2 * SLEEP_S - 0.05, (
+        f"Tavily calls ran sequentially (elapsed={elapsed:.2f}s, expected < {2 * SLEEP_S - 0.05:.2f}s)"
+    )

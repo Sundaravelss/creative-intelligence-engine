@@ -88,14 +88,13 @@ async def test_raises_when_binary_missing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_returns_text_when_subprocess_emits_stream_json() -> None:
+async def test_returns_plain_text_from_oneshot_mode() -> None:
+    """Hermes ``-z`` (one-shot) emits the final response as plain text on
+    stdout — no JSONL events, no usage payload."""
     fake = _FakeProc(
         stdout_lines=[
-            '{"type":"start"}',
-            '{"delta":"Pitch a "}',
-            '{"delta":"Reels ad "}',
-            '{"text":"for wool sneakers."}',
-            '{"usage":{"input_tokens":12,"output_tokens":34}}',
+            "Pitch a Reels ad",
+            "for wool sneakers.",
         ]
     )
     with patch(
@@ -106,10 +105,9 @@ async def test_returns_text_when_subprocess_emits_stream_json() -> None:
     ):
         result = await hermes_cli.execute(_ctx("Pitch a Reels ad."))
     assert result.exit_code == 0
-    assert result.result_json["text"] == "Pitch a Reels ad for wool sneakers."
+    assert "Pitch a Reels ad" in result.result_json["text"]
+    assert "for wool sneakers." in result.result_json["text"]
     assert result.result_json["provider"] == "hermes_cli"
-    assert result.usage.input_tokens == 12
-    assert result.usage.output_tokens == 34
 
 
 @pytest.mark.asyncio
