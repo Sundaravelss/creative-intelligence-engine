@@ -308,6 +308,12 @@ class ChatCompletionsInput(BaseModel):
     # include `reference_url="..."` on its `<image .../>` sentinel so the
     # backend routes through fal-ai/flux/dev/image-to-image.
     attachments: list[ChatAttachmentInput] = Field(default_factory=list)
+    # When present, the brand profile (name + palette + logoUrl + tagline +
+    # voice) is woven into the persona's system prompt so generations stay
+    # on-brand. The frontend reads /api/brand and forwards it here. When
+    # absent, we lazily load fixtures/brand.json server-side as a fallback
+    # so the user doesn't have to re-fetch it on every turn.
+    brand: dict[str, Any] | None = None
 
 
 # Sentinel-tag protocol: persona emits
@@ -334,6 +340,77 @@ _ATTR_PATTERN = re.compile(
 # when the persona supplies a reference_url.
 _DEFAULT_FAL_MODEL = "fal-ai/flux/schnell"
 _I2I_FAL_MODEL = "fal-ai/flux/dev/image-to-image"
+
+# Repo-root-relative fallback brand fixture path. Resolved at module import.
+_BRAND_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[3] / "fixtures" / "brand.json"
+)
+
+
+def _load_brand_fallback() -> dict[str, Any] | None:
+    """Best-effort load of fixtures/brand.json so chat-completions still has
+    brand context when the frontend forgets to forward `brand` on the body.
+    Errors are swallowed (returns None) — brand context is enrichment, not
+    a hard requirement.
+    """
+    try:
+        if not _BRAND_FIXTURE_PATH.exists():
+            return None
+        import json as _json
+
+        return _json.loads(_BRAND_FIXTURE_PATH.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _brand_context_block(brand: dict[str, Any]) -> str:
+    """Render the brand profile as a compact block to append to the persona
+    system prompt. Empty / missing fields are skipped.
+    """
+    name = (brand.get("name") or "").strip()
+    tagline = (brand.get("tagline") or "").strip()
+    voice = (brand.get("voice") or "").strip()
+    palette = brand.get("palette") or []
+    logo_url = (brand.get("logoUrl") or "").strip()
+    products = brand.get("products") or []
+    source_url = (brand.get("sourceUrl") or "").strip()
+
+    if not (name or tagline or palette or logo_url):
+        return ""
+
+    lines: list[str] = ["BRAND CONTEXT (use this on every reply — stay on-brand)"]
+    if name:
+        lines.append(f"- Brand name: {name}")
+    if tagline:
+        lines.append(f"- Tagline: {tagline}")
+    if source_url:
+        lines.append(f"- Site: {source_url}")
+    if isinstance(palette, list) and palette:
+        swatches = ", ".join(str(c) for c in palette[:8])
+        lines.append(f"- Palette (hex): {swatches}")
+    if voice:
+        lines.append(f"- Voice notes: {voice[:300]}")
+    if logo_url:
+        lines.append(f"- Logo URL (for reference): {logo_url}")
+    if isinstance(products, list) and products:
+        labels: list[str] = []
+        for p in products[:6]:
+            if isinstance(p, dict):
+                labels.append(str(p.get("name") or p.get("id") or ""))
+            else:
+                labels.append(str(p))
+        labels = [s for s in labels if s]
+        if labels:
+            lines.append(f"- Featured products: {', '.join(labels)}")
+
+    lines.append(
+        "When you propose visual treatments and emit your <image .../> sentinel, "
+        "weave the brand name, palette, and product context into the prompt — "
+        "do NOT invent fake brand names like 'Premium' or 'Acme'. If the user "
+        "uploads a reference image (their logo or a product), use it as the "
+        "reference_url so the variants honor the actual asset."
+    )
+    return "\n".join(lines)
 
 _ASPECT_TO_IMAGE_SIZE: dict[str, str] = {
     "9:16": "portrait_16_9",
@@ -463,6 +540,16 @@ async def _drive_chat_stream(
     # tag as conversation noise. Claude can't fetch URLs — we have to be
     # very explicit in the system prompt.
     instructions = persona.system_prompt
+
+    # Brand context (name, palette, logo, voice) goes into the system
+    # prompt so Sage doesn't invent fake brand names. Source priority:
+    # request body → fixtures/brand.json fallback. Either way the user
+    # NEVER has to re-supply brand on each turn.
+    brand_payload = body.brand or _load_brand_fallback() or {}
+    if brand_payload:
+        block = _brand_context_block(brand_payload)
+        if block:
+            instructions = instructions + "\n\n" + block
     if body.attachments:
         attachment_lines = "\n".join(
             f'<attached_image url="{a.url}" filename="{a.filename or ""}" />'

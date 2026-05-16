@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { notFound, useParams } from "next/navigation";
 import { toast } from "sonner";
 import type { Artifact as UiArtifact } from "@cie/ui-artifacts";
@@ -13,6 +13,7 @@ import type {
 } from "@/components/studio/chat/types";
 import { LiquidCanvas } from "@/components/studio/canvas/LiquidCanvas";
 import type { CanvasViewMode } from "@/components/studio/canvas/ViewModeToggle";
+import { api } from "@/lib/api";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8100";
@@ -81,7 +82,26 @@ export default function AgentChatPage() {
   const [adapter, setAdapter] = useState("claude_code");
   const [viewMode, setViewMode] = useState<CanvasViewMode>("carousel");
   const [focusId, setFocusId] = useState<string | null>(null);
+  const [brand, setBrand] = useState<Record<string, unknown> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Load brand profile so each agent's chat stays on-brand. Same backend
+  // also has a fixtures/brand.json fallback, so a fetch failure here is
+  // non-fatal — the persona just uses the fallback.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get<Record<string, unknown>>("/api/brand")
+      .then((b) => {
+        if (!cancelled) setBrand(b ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setBrand(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSubmit = useCallback(
     async (
@@ -131,6 +151,7 @@ export default function AgentChatPage() {
               filename: a.filename,
               content_type: a.contentType,
             })),
+            brand: brand ?? undefined,
           }),
           signal: controller.signal,
         });
@@ -273,7 +294,7 @@ export default function AgentChatPage() {
         setRunning(false);
       }
     },
-    [adapter, agent, agentId, focusId, running],
+    [adapter, agent, agentId, brand, focusId, running],
   );
 
   return (

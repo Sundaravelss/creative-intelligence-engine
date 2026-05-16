@@ -323,6 +323,11 @@ function StudioPageInner() {
               filename: a.filename,
               content_type: a.contentType,
             })),
+            // Forward brand profile so Sage stays on-brand (real name +
+            // palette + logo, no hallucinated 'Premium' / 'Acme'). Backend
+            // also lazy-loads fixtures/brand.json as a fallback if this is
+            // null.
+            brand: brand ?? undefined,
           }),
           signal: controller.signal,
         });

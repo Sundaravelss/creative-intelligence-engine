@@ -363,6 +363,41 @@ def test_chat_completions_image_edit_passes_reference_url(
 
 
 @pytest.mark.unit
+def test_chat_completions_brand_context_in_system_prompt(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the request carries `brand`, the persona's instructions get a
+    BRAND CONTEXT block with name + palette + tagline. This is what stops
+    Sage from generating fake brand names like 'Premium' on a tote bag.
+    """
+    captured = _patch_runtime_with_text(monkeypatch, "ok")
+
+    resp = client.post(
+        "/api/chat/completions",
+        json={
+            "messages": [{"role": "user", "content": "make me a hero shot"}],
+            "brand": {
+                "name": "Leifshop",
+                "tagline": "Comfortable, sustainable shoes & apparel",
+                "palette": ["#231f20", "#82673f", "#4b3716", "#e8c279"],
+                "logoUrl": "https://leifshop.com/logo.png",
+                "sourceUrl": "https://www.leifshop.com",
+            },
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(captured) == 1
+    instructions = captured[0]["instructions"]
+    assert "BRAND CONTEXT" in instructions
+    assert "Leifshop" in instructions
+    assert "#231f20" in instructions
+    assert "#82673f" in instructions
+    assert "Comfortable, sustainable shoes & apparel" in instructions
+    # Anti-hallucination guidance MUST be present.
+    assert "do NOT invent fake brand names" in instructions
+
+
+@pytest.mark.unit
 def test_chat_completions_attachments_inject_reference_url_into_persona(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
